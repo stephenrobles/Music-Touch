@@ -9,6 +9,10 @@ final class OverlayPanel: NSPanel {
 @MainActor
 final class OverlayController: OverlayViewDelegate {
     var onStrike: ((Int, CGPoint, StrikeSource) -> Void)?
+    var onTouchDiagnostic: ((String) -> Void)? {
+        get { view.onTouchDiagnostic }
+        set { view.onTouchDiagnostic = newValue }
+    }
 
     var orientation: ZoneOrientation {
         get { view.orientation }

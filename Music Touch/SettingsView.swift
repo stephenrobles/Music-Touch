@@ -44,6 +44,27 @@ struct SettingsView: View {
             Section {
                 if state.canControlLidLogo {
                     Toggle("Pulse the Apple logo on the lid", isOn: $state.pulsesLogo)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Blink length")
+                            Spacer()
+                            Text(String(format: "%.2f s", state.logoBlinkSeconds))
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Slider(value: $state.logoBlinkSeconds, in: LidLogoController.blinkRange, step: 0.05) {
+                            Text("Blink length")
+                        } minimumValueLabel: {
+                            Text("Quick")
+                        } maximumValueLabel: {
+                            Text("Slow")
+                        }
+                        .labelsHidden()
+                        Text("How long the logo stays dark after each note before it comes back. The logo itself fades, so very short values may not be visible.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                    .disabled(!state.pulsesLogo)
 
                     LabeledContent("Helper") {
                         HStack(spacing: 6) {
@@ -103,6 +124,13 @@ struct SettingsView: View {
                 LabeledContent("Audio engine", value: state.isEnabled ? (state.audioRunning ? "Running" : "Not running") : "Idle until Music Touch is on")
                 LabeledContent("Audio output", value: state.audioOutputName)
                 LabeledContent("Last input", value: state.lastInputDescription)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Last touch")
+                    Text(state.lastTouchDiagnostic)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             } header: {
                 Text("Status")
             } footer: {

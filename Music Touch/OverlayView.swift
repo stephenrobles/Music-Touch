@@ -89,6 +89,9 @@ final class DirectTouchRecognizer: NSGestureRecognizer {
 final class OverlayView: NSView {
     weak var delegate: OverlayViewDelegate?
 
+    /// One line describing the most recent finger-down, for Settings › Status and the log.
+    var onTouchDiagnostic: ((String) -> Void)?
+
     var orientation: ZoneOrientation = .vertical {
         didSet { rebuildGuides() }
     }
@@ -155,15 +158,16 @@ final class OverlayView: NSView {
         switch phase {
         case .began:
             for touch in touches {
-                let point = touch.location(in: self)
+                let point = location(of: touch)
                 let zone = zone(at: point)
                 touchZones[key(for: touch)] = zone
                 recentTouches.append((point, now))
+                report(touch, resolved: point, zone: zone)
                 strike(zone: zone, at: point, from: .touch)
             }
         case .moved:
             for touch in touches {
-                let point = touch.location(in: self)
+                let point = location(of: touch)
                 let zone = zone(at: point)
                 let key = key(for: touch)
                 recentTouches.append((point, now))
@@ -174,11 +178,44 @@ final class OverlayView: NSView {
             }
         default:
             for touch in touches {
-                recentTouches.append((touch.location(in: self), now))
+                recentTouches.append((location(of: touch), now))
                 touchZones.removeValue(forKey: key(for: touch))
             }
         }
         recentTouches.removeAll { now - $0.time > echoWindow }
+    }
+
+    /// Where a finger is, in this view's coordinates.
+    ///
+    /// The touch's normalized position is its place on the touchscreen surface, (0, 0) at the
+    /// lower left and (1, 1) at the upper right, and the overlay covers exactly that surface, so
+    /// scaling it by the bounds is the most direct mapping. `location(in:)` is the fallback when
+    /// the normalized position is not populated.
+    private func location(of touch: NSTouch) -> CGPoint {
+        let n = touch.normalizedPosition
+        let normalizedIsUsable = n.x.isFinite && n.y.isFinite
+            && (0...1).contains(n.x) && (0...1).contains(n.y)
+            && !(n.x == 0 && n.y == 0)
+        if normalizedIsUsable {
+            return CGPoint(x: n.x * bounds.width, y: n.y * bounds.height)
+        }
+        return touch.location(in: self)
+    }
+
+    private func report(_ touch: NSTouch, resolved point: CGPoint, zone: Int) {
+        guard let onTouchDiagnostic else { return }
+        func f(_ v: CGFloat) -> String { String(format: "%.0f", v) }
+        func f3(_ v: CGFloat) -> String { String(format: "%.3f", v) }
+        let inView = touch.location(in: self)
+        let inWindow = touch.location(in: nil)
+        let n = touch.normalizedPosition
+        let windowFrame = window?.frame ?? .zero
+        let line = "zone \(NoteZone.names[zone]) at (\(f(point.x)), \(f(point.y))) · "
+            + "view (\(f(inView.x)), \(f(inView.y))) · window (\(f(inWindow.x)), \(f(inWindow.y))) · "
+            + "normalized (\(f3(n.x)), \(f3(n.y))) · bounds \(f(bounds.width))×\(f(bounds.height)) · "
+            + "panel \(f(windowFrame.width))×\(f(windowFrame.height)) at (\(f(windowFrame.origin.x)), \(f(windowFrame.origin.y))) · "
+            + "device \(f(touch.deviceSize.width))×\(f(touch.deviceSize.height))"
+        onTouchDiagnostic(line)
     }
 
     // MARK: Mouse (trackpad testing, and the click macOS synthesizes for a tap)

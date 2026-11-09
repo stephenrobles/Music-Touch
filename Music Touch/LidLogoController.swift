@@ -16,8 +16,11 @@ final class LidLogoController {
     nonisolated static let scriptPath = helperDirectory + "/logo-helper.sh"
     nonisolated static let plistPath = "/Library/LaunchDaemons/\(label).plist"
 
+    static let defaultBlinkSeconds: TimeInterval = 0.3
+    static let blinkRange: ClosedRange<TimeInterval> = 0.05...1.5
+
     /// How long the logo stays dark after a note is struck before it comes back.
-    var blinkSeconds: TimeInterval = 0.3
+    var blinkSeconds: TimeInterval = LidLogoController.defaultBlinkSeconds
 
     private enum Lamp: String { case on, off }
 

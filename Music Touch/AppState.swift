@@ -21,6 +21,7 @@ final class AppState {
         static let showsGuides = "showsGuides"
         static let pulsesLogo = "pulsesLogo"
         static let noteLength = "noteLength"
+        static let logoBlink = "logoBlinkSeconds"
     }
 
     var isEnabled = false {
@@ -56,6 +57,17 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(noteLength, forKey: Keys.noteLength)
             piano.noteLength = noteLength
+        }
+    }
+
+    /// How long the lid logo stays dark after a note before it comes back.
+    var logoBlinkSeconds: Double = {
+        let stored = UserDefaults.standard.double(forKey: Keys.logoBlink)
+        return stored > 0 ? stored : LidLogoController.defaultBlinkSeconds
+    }() {
+        didSet {
+            UserDefaults.standard.set(logoBlinkSeconds, forKey: Keys.logoBlink)
+            logo.blinkSeconds = logoBlinkSeconds
         }
     }
 
@@ -98,6 +110,9 @@ final class AppState {
 
     private(set) var lastInput: LastInput?
 
+    /// Raw coordinates of the last finger-down, to check touch mapping on real hardware.
+    private(set) var lastTouchDiagnostic = "No touch yet"
+
     var lastInputDescription: String {
         guard let lastInput else { return "None yet" }
         let time = lastInput.date.formatted(date: .omitted, time: .standard)
@@ -114,6 +129,11 @@ final class AppState {
         overlay.orientation = orientation
         overlay.showsGuides = showsGuides
         piano.noteLength = noteLength
+        logo.blinkSeconds = logoBlinkSeconds
+        overlay.onTouchDiagnostic = { [weak self] line in
+            self?.lastTouchDiagnostic = line
+            log.info("touch \(line, privacy: .public)")
+        }
         audioOutputName = piano.outputDeviceName
         piano.onOutputDeviceChange = { [weak self] in
             guard let self else { return }
