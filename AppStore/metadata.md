@@ -5,7 +5,7 @@ Everything entered in App Store Connect for 1.0, kept here as the source of trut
 
 ## App Information
 
-- **Name:** Music Touch
+- **Name:** Music Touch: Touchscreen Piano
 - **Subtitle (30):** Play your touchscreen Mac
 - **Bundle ID:** fm.beard.MusicTouch (Mac)
 - **SKU:** MusicTouch
@@ -23,7 +23,7 @@ Everything entered in App Store Connect for 1.0, kept here as the source of trut
 ## Version Information (1.0)
 
 **Promotional text (170):**
-Turn the whole screen into a piano. Touch anywhere on your MacBook Pro's display to play a note from the C major scale, with a glowing ring on every touch. Free and open source.
+Turn the whole screen into a piano. Touch anywhere on your MacBook Pro's display to play the C major scale, with a glowing ring on every touch. Free and open source.
 
 **Description (4000):**
 Music Touch turns the touchscreen on your MacBook Pro into a piano. Turn it on from the menu bar and the whole display becomes nine note zones playing the C major scale, from middle C at the bottom up to the D above the octave at the top. Touch anywhere to play. Use several fingers for a chord, or slide a finger across the zones for a glissando. Every touch sends out a glowing ring in that note's colour.
