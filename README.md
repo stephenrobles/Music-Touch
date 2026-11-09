@@ -1,5 +1,7 @@
 # Music Touch
 
+![Music Touch playing a rising scale: nine horizontal note zones with coloured rings spreading from each touch](AppStore/screenshots/mac-01-vertical.png)
+
 A free Mac menu bar utility that turns the touchscreen on the MacBook Pro with PROLED XDR Display
 into a piano. Turn it on and the whole screen becomes nine note zones playing the C major scale from
 middle C (C4) up to the D above the octave (D5). Touch anywhere to play, use several fingers for a
