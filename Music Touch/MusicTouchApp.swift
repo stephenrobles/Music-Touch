@@ -12,10 +12,6 @@ struct MusicTouchApp: App {
             Image(systemName: state.isEnabled ? "pianokeys.inverse" : "pianokeys")
         }
         .menuBarExtraStyle(.menu)
-
-        Settings {
-            SettingsView(state: state)
-        }
     }
 }
 
@@ -46,8 +42,8 @@ struct MenuContent: View {
 
         Divider()
 
-        SettingsLink {
-            Text("Settings…")
+        Button("Settings…") {
+            SettingsWindowController.shared.show(state: state)
         }
         .keyboardShortcut(",")
         if AppUpdater.isAvailable {

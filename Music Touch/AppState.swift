@@ -21,7 +21,9 @@ final class AppState {
         static let showsGuides = "showsGuides"
         static let pulsesLogo = "pulsesLogo"
         static let noteLength = "noteLength"
-        static let logoBlink = "logoBlinkSeconds"
+        static let keyRoot = "keyRoot"
+        static let scaleMode = "scaleMode"
+        static let zoneCount = "zoneCount"
     }
 
     var isEnabled = false {
@@ -34,6 +36,35 @@ final class AppState {
             overlay.orientation = orientation
         }
     }
+
+    /// The key the zones play in.
+    var keyRoot: KeyRoot = KeyRoot(rawValue: UserDefaults.standard.integer(forKey: Keys.keyRoot)) ?? .c {
+        didSet {
+            UserDefaults.standard.set(keyRoot.rawValue, forKey: Keys.keyRoot)
+            applyScale()
+        }
+    }
+
+    /// Major or minor.
+    var scaleMode: ScaleMode = ScaleMode(rawValue: UserDefaults.standard.string(forKey: Keys.scaleMode) ?? "") ?? .major {
+        didSet {
+            UserDefaults.standard.set(scaleMode.rawValue, forKey: Keys.scaleMode)
+            applyScale()
+        }
+    }
+
+    /// How many zones share the screen, 8 (one octave) to 12.
+    var zoneCount: Int = {
+        let stored = UserDefaults.standard.integer(forKey: Keys.zoneCount)
+        return Scale.degreeRange.contains(stored) ? stored : Scale.defaultDegrees
+    }() {
+        didSet {
+            UserDefaults.standard.set(zoneCount, forKey: Keys.zoneCount)
+            applyScale()
+        }
+    }
+
+    var scale: Scale { Scale(root: keyRoot, mode: scaleMode, degrees: zoneCount) }
 
     var showsGuides = UserDefaults.standard.bool(forKey: Keys.showsGuides) {
         didSet {
@@ -57,17 +88,6 @@ final class AppState {
         didSet {
             UserDefaults.standard.set(noteLength, forKey: Keys.noteLength)
             piano.noteLength = noteLength
-        }
-    }
-
-    /// How long the lid logo stays dark after a note before it comes back.
-    var logoBlinkSeconds: Double = {
-        let stored = UserDefaults.standard.double(forKey: Keys.logoBlink)
-        return stored > 0 ? stored : LidLogoController.defaultBlinkSeconds
-    }() {
-        didSet {
-            UserDefaults.standard.set(logoBlinkSeconds, forKey: Keys.logoBlink)
-            logo.blinkSeconds = logoBlinkSeconds
         }
     }
 
@@ -116,7 +136,9 @@ final class AppState {
     var lastInputDescription: String {
         guard let lastInput else { return "None yet" }
         let time = lastInput.date.formatted(date: .omitted, time: .standard)
-        return "\(lastInput.source.rawValue) · \(NoteZone.names[lastInput.zone]) · \(time)"
+        let names = scale.names
+        let name = names.indices.contains(lastInput.zone) ? names[lastInput.zone] : "zone \(lastInput.zone + 1)"
+        return "\(lastInput.source.rawValue) · \(name) · \(time)"
     }
 
     @ObservationIgnored let overlay = OverlayController()
@@ -129,7 +151,7 @@ final class AppState {
         overlay.orientation = orientation
         overlay.showsGuides = showsGuides
         piano.noteLength = noteLength
-        logo.blinkSeconds = logoBlinkSeconds
+        applyScale()
         overlay.onTouchDiagnostic = { [weak self] line in
             self?.lastTouchDiagnostic = line
             log.info("touch \(line, privacy: .public)")
@@ -191,6 +213,13 @@ final class AppState {
         refreshHelperStatus()
     }
 
+    private func applyScale() {
+        let scale = self.scale
+        piano.scale = scale
+        overlay.scale = scale
+        log.info("scale is now \(scale.title, privacy: .public): \(scale.names.joined(separator: " "), privacy: .public)")
+    }
+
     private func applyEnabled() {
         log.info("Music Touch \(self.isEnabled ? "on" : "off", privacy: .public)")
         if isEnabled {
@@ -207,11 +236,11 @@ final class AppState {
     }
 
     private func strike(zone: Int, from source: StrikeSource) {
-        log.debug("strike zone \(zone) \(NoteZone.names[zone], privacy: .public) via \(source.rawValue, privacy: .public)")
+        log.debug("strike zone \(zone) \(self.scale.names[zone], privacy: .public) via \(source.rawValue, privacy: .public)")
         lastInput = LastInput(source: source, zone: zone, date: .now)
         piano.play(zone: zone)
         if pulsesLogo {
-            logo.noteStruck()
+            logo.noteStruck(litFor: piano.holdLength)
         }
     }
 }

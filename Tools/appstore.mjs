@@ -10,7 +10,9 @@
 //   attach       attach the newest processed build to the version
 //   submit       submit the version for review
 //   release      automatic release after approval, or --manual to release by hand
+//   withdraw     cancel the pending review submission (the version becomes Developer Rejected) so a new build can be attached and resubmitted
 //   status       print versions, builds and review state
+// The version string is MARKETING_VERSION from the Xcode project (override with ASC_VERSION).
 // Auth: App Store Connect API key at ~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8.
 import { createPrivateKey, sign, createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
@@ -22,8 +24,9 @@ const KEY_ID = process.env.ASC_KEY_ID || "Z5YD293RLM";
 const ISSUER_ID = process.env.ASC_ISSUER_ID || "69a6de84-dcf8-47e3-e053-5b8c7c11a4d1";
 const BUNDLE_ID = "fm.beard.MusicTouch";
 const PLATFORM = "MAC_OS";
-const VERSION = "1.0";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const VERSION = process.env.ASC_VERSION
+  || readFileSync(join(ROOT, "Music Touch.xcodeproj/project.pbxproj"), "utf8").match(/MARKETING_VERSION = ([^;]+);/)[1].trim();
 const API = "https://api.appstoreconnect.apple.com/v1";
 
 // ---------- auth ----------
@@ -86,6 +89,11 @@ async function version(appId) {
   if (!v) {
     v = (await post("/appStoreVersions", { data: { type: "appStoreVersions", attributes: { platform: PLATFORM, versionString: VERSION, copyright: META.copyright }, relationships: { app: { data: { type: "apps", id: appId } } } } })).data;
     console.log(`created ${PLATFORM} version ${VERSION}`);
+  } else if (v.attributes.versionString !== VERSION) {
+    // The one editable version carries over: rename it rather than leaving a stale number behind.
+    const was = v.attributes.versionString;
+    v = (await patch(`/appStoreVersions/${v.id}`, { data: { type: "appStoreVersions", id: v.id, attributes: { versionString: VERSION } } })).data;
+    console.log(`renamed version ${was} → ${VERSION}`);
   }
   return v;
 }
@@ -280,6 +288,19 @@ async function release() {
   console.log(`${VERSION}: release type set to ${manual ? "manual" : "automatic (after approval)"}`);
 }
 
+/// Pulls the current submission out of review. App Store Connect marks the version Developer
+/// Rejected; `attach` and `submit` then take the next build in.
+async function withdraw() {
+  const a = await app();
+  const subs = await get(`/apps/${a.id}/reviewSubmissions?filter[platform]=${PLATFORM}&limit=10`);
+  const pending = subs.data.filter((s) => ["WAITING_FOR_REVIEW", "IN_REVIEW", "UNRESOLVED_ISSUES", "READY_FOR_REVIEW"].includes(s.attributes.state));
+  if (!pending.length) { console.log(`nothing in review (${subs.data.map((s) => s.attributes.state).join(", ") || "no submissions"})`); return; }
+  for (const sub of pending) {
+    await patch(`/reviewSubmissions/${sub.id}`, { data: { type: "reviewSubmissions", id: sub.id, attributes: { canceled: true } } });
+    console.log(`withdrew submission ${sub.id} (was ${sub.attributes.state})`);
+  }
+}
+
 async function status() {
   const a = await app();
   console.log(`${a.attributes.name} (${a.id})`);
@@ -291,7 +312,7 @@ async function status() {
   for (const s of subs.data) console.log(`  submission ${s.id}: ${s.attributes.state}`);
 }
 
-const commands = { bundleid, metadata, prepare, screenshots, attach, submit, release, status };
+const commands = { bundleid, metadata, prepare, screenshots, attach, submit, release, withdraw, status };
 const cmd = process.argv[2];
-if (!commands[cmd]) { console.error("usage: node Tools/appstore.mjs bundleid|metadata|prepare|screenshots|attach|submit|release|status"); process.exit(1); }
+if (!commands[cmd]) { console.error("usage: node Tools/appstore.mjs bundleid|metadata|prepare|screenshots|attach|submit|release|withdraw|status"); process.exit(1); }
 await commands[cmd]();

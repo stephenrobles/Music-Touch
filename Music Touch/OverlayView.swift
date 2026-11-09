@@ -21,7 +21,7 @@ protocol OverlayViewDelegate: AnyObject {
 /// (Apple TN3212). This recognizer exists only to receive touches and hand them to the view. It
 /// reports `began` / `changed` / `ended` so AppKit keeps delivering, and never acts on its own.
 final class DirectTouchRecognizer: NSGestureRecognizer {
-    var handler: ((Set<NSTouch>, NSTouch.Phase) -> Void)?
+    var handler: ((Set<NSTouch>, NSTouch.Phase, NSEvent) -> Void)?
 
     /// Last known location in window coordinates, for `location(in:)`.
     private var lastWindowLocation: NSPoint = .zero
@@ -43,22 +43,30 @@ final class DirectTouchRecognizer: NSGestureRecognizer {
 
     override func touchesBegan(with event: NSEvent) {
         let touches = touches(in: event)
-        log.info("recognizer touchesBegan: \(touches.count) touches (all: \(event.allTouches().count)), state \(self.state.rawValue), window \(self.view?.window != nil)")
+        let phases = touches.map { String($0.phase.rawValue) }.joined(separator: ",")
+        log.info("recognizer touchesBegan: \(touches.count) touches (all: \(event.allTouches().count)), phases [\(phases, privacy: .public)], state \(self.state.rawValue), window \(self.view?.window != nil)")
         remember(touches)
-        handler?(touches.filter { $0.phase == .began }, .began)
+        // Phase filtering is a hint, not a gate: a direct touch that arrives here is beginning.
+        let beginning = touches.filter { $0.phase == .began }
+        handler?(beginning.isEmpty ? touches : beginning, .began, event)
         state = state == .possible ? .began : .changed
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        log.info("recognizer saw mouseDown subtype \(event.subtype.rawValue), state \(self.state.rawValue)")
+        super.mouseDown(with: event)
     }
 
     override func touchesMoved(with event: NSEvent) {
         let touches = touches(in: event)
         remember(touches)
-        handler?(touches.filter { $0.phase == .moved }, .moved)
+        handler?(touches.filter { $0.phase == .moved }, .moved, event)
         if state == .began || state == .changed { state = .changed }
     }
 
     override func touchesEnded(with event: NSEvent) {
         let touches = touches(in: event)
-        handler?(touches.filter { $0.phase == .ended }, .ended)
+        handler?(touches.filter { $0.phase == .ended }, .ended, event)
         let stillTouching = touches.contains { NSTouch.Phase.touching.contains($0.phase) }
         if state == .began || state == .changed {
             state = stillTouching ? .changed : .ended
@@ -67,7 +75,7 @@ final class DirectTouchRecognizer: NSGestureRecognizer {
 
     override func touchesCancelled(with event: NSEvent) {
         let touches = touches(in: event)
-        handler?(touches.filter { $0.phase == .cancelled }, .cancelled)
+        handler?(touches.filter { $0.phase == .cancelled }, .cancelled, event)
         if state == .began || state == .changed { state = .cancelled }
     }
 
@@ -102,6 +110,11 @@ final class OverlayView: NSView {
         didSet { rebuildGuides() }
     }
 
+    /// Names the guide labels and diagnostics use for the zones.
+    var scale: Scale = .default {
+        didSet { if scale != oldValue { rebuildGuides() } }
+    }
+
     private let guidesLayer = CALayer()
     private let glowLayer = CALayer()
     private let touchRecognizer = DirectTouchRecognizer(target: nil, action: nil)
@@ -128,9 +141,10 @@ final class OverlayView: NSView {
         layer?.addSublayer(guidesLayer)
         layer?.addSublayer(glowLayer)
 
-        touchRecognizer.handler = { [unowned self] touches, phase in
-            self.handleTouches(touches, phase: phase)
+        touchRecognizer.handler = { [unowned self] touches, phase, event in
+            self.handleTouches(touches, phase: phase, event: event)
         }
+        touchRecognizer.delegate = self
         addGestureRecognizer(touchRecognizer)
     }
 
@@ -155,21 +169,21 @@ final class OverlayView: NSView {
 
     // MARK: Direct touches (via the gesture recognizer)
 
-    private func handleTouches(_ touches: Set<NSTouch>, phase: NSTouch.Phase) {
+    private func handleTouches(_ touches: Set<NSTouch>, phase: NSTouch.Phase, event: NSEvent) {
         let now = CACurrentMediaTime()
         switch phase {
         case .began:
             for touch in touches {
-                let point = location(of: touch)
+                let (point, space) = location(of: touch, event: event)
                 let zone = zone(at: point)
                 touchZones[key(for: touch)] = zone
                 recentTouches.append((point, now))
-                report(touch, resolved: point, zone: zone)
+                report(touch, event: event, resolved: point, space: space, zone: zone)
                 strike(zone: zone, at: point, from: .touch)
             }
         case .moved:
             for touch in touches {
-                let point = location(of: touch)
+                let (point, _) = location(of: touch, event: event)
                 let zone = zone(at: point)
                 let key = key(for: touch)
                 recentTouches.append((point, now))
@@ -180,43 +194,60 @@ final class OverlayView: NSView {
             }
         default:
             for touch in touches {
-                recentTouches.append((location(of: touch), now))
+                recentTouches.append((location(of: touch, event: event).0, now))
                 touchZones.removeValue(forKey: key(for: touch))
             }
         }
         recentTouches.removeAll { now - $0.time > echoWindow }
     }
 
-    /// Where a finger is, in this view's coordinates.
+    /// Where a finger is, in this view's coordinates, and which coordinate space supplied it.
     ///
-    /// The touch's normalized position is its place on the touchscreen surface, (0, 0) at the
-    /// lower left and (1, 1) at the upper right, and the overlay covers exactly that surface, so
-    /// scaling it by the bounds is the most direct mapping. `location(in:)` is the fallback when
-    /// the normalized position is not populated.
-    private func location(of touch: NSTouch) -> CGPoint {
-        let n = touch.normalizedPosition
-        let normalizedIsUsable = n.x.isFinite && n.y.isFinite
-            && (0...1).contains(n.x) && (0...1).contains(n.y)
-            && !(n.x == 0 && n.y == 0)
-        if normalizedIsUsable {
-            return CGPoint(x: n.x * bounds.width, y: n.y * bounds.height)
+    /// `NSTouch.normalizedPosition` and `deviceSize` are trackpad properties: on macOS 27 reading
+    /// them on a direct (touchscreen) touch raises an internal assertion that unwinds the whole
+    /// event, so they are never read for direct touches. The touch's own `location(in:)` is the
+    /// first choice; when that lands outside the overlay the event's `locationInWindow` and the
+    /// current screen pointer position are tried in turn, since the touchscreen reports some of
+    /// these in a space the overlay panel does not share.
+    private func location(of touch: NSTouch, event: NSEvent) -> (CGPoint, String) {
+        var candidates: [(String, CGPoint)] = []
+        if touch.type == .direct {
+            candidates.append(("touch", touch.location(in: self)))
+            candidates.append(("event", convert(event.locationInWindow, from: nil)))
+            if let window {
+                let screenPoint = NSEvent.mouseLocation
+                let windowPoint = window.convertPoint(fromScreen: screenPoint)
+                candidates.append(("pointer", convert(windowPoint, from: nil)))
+            }
+        } else {
+            let n = touch.normalizedPosition
+            if n.x.isFinite, n.y.isFinite, (0...1).contains(n.x), (0...1).contains(n.y), !(n.x == 0 && n.y == 0) {
+                candidates.append(("normalized", CGPoint(x: n.x * bounds.width, y: n.y * bounds.height)))
+            }
+            candidates.append(("touch", touch.location(in: self)))
         }
-        return touch.location(in: self)
+        if let hit = candidates.first(where: { bounds.contains($0.1) }) {
+            return (hit.1, hit.0)
+        }
+        let fallback = candidates[0]
+        return (fallback.1, fallback.0 + " (out of bounds)")
     }
 
-    private func report(_ touch: NSTouch, resolved point: CGPoint, zone: Int) {
+    private func report(_ touch: NSTouch, event: NSEvent, resolved point: CGPoint, space: String, zone: Int) {
         guard let onTouchDiagnostic else { return }
         func f(_ v: CGFloat) -> String { String(format: "%.0f", v) }
-        func f3(_ v: CGFloat) -> String { String(format: "%.3f", v) }
+        func f(_ p: CGPoint) -> String { "(\(f(p.x)), \(f(p.y)))" }
         let inView = touch.location(in: self)
         let inWindow = touch.location(in: nil)
-        let n = touch.normalizedPosition
+        let eventInView = convert(event.locationInWindow, from: nil)
+        let pointer = NSEvent.mouseLocation
         let windowFrame = window?.frame ?? .zero
-        let line = "zone \(NoteZone.names[zone]) at (\(f(point.x)), \(f(point.y))) · "
-            + "view (\(f(inView.x)), \(f(inView.y))) · window (\(f(inWindow.x)), \(f(inWindow.y))) · "
-            + "normalized (\(f3(n.x)), \(f3(n.y))) · bounds \(f(bounds.width))×\(f(bounds.height)) · "
-            + "panel \(f(windowFrame.width))×\(f(windowFrame.height)) at (\(f(windowFrame.origin.x)), \(f(windowFrame.origin.y))) · "
-            + "device \(f(touch.deviceSize.width))×\(f(touch.deviceSize.height))"
+        let line = "zone \(scale.names[zone]) at \(f(point)) via \(space) · "
+            + "touch view \(f(inView)) window \(f(inWindow)) · "
+            + "event view \(f(eventInView)) window \(f(event.locationInWindow)) · "
+            + "pointer screen \(f(pointer)) · type \(touch.type == .direct ? "direct" : "indirect") · "
+            + "bounds \(f(bounds.width))×\(f(bounds.height)) · "
+            + "panel \(f(windowFrame.width))×\(f(windowFrame.height)) at \(f(windowFrame.origin))"
         onTouchDiagnostic(line)
     }
 
@@ -227,7 +258,8 @@ final class OverlayView: NSView {
         let now = CACurrentMediaTime()
         recentTouches.removeAll { now - $0.time > echoWindow }
         mouseIsEcho = recentTouches.contains { hypot($0.point.x - point.x, $0.point.y - point.y) < echoDistance }
-        log.info("mouseDown subtype \(event.subtype.rawValue) at (\(Int(point.x)), \(Int(point.y))) in bounds \(Int(self.bounds.width))×\(Int(self.bounds.height)), echo \(self.mouseIsEcho)")
+        let pointer = NSEvent.mouseLocation
+        log.info("mouseDown subtype \(event.subtype.rawValue) at (\(Int(point.x)), \(Int(point.y))) in bounds \(Int(self.bounds.width))×\(Int(self.bounds.height)), pointer screen (\(Int(pointer.x)), \(Int(pointer.y))), echo \(self.mouseIsEcho)")
         guard !mouseIsEcho else { return }
         let zone = zone(at: point)
         mouseZone = zone
@@ -239,12 +271,14 @@ final class OverlayView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let zone = zone(at: point)
         if mouseZone != zone {
+            log.info("mouseDragged to zone \(zone) at (\(Int(point.x)), \(Int(point.y))), previous \(self.mouseZone.map(String.init) ?? "none", privacy: .public)")
             mouseZone = zone
             strike(zone: zone, at: point, from: .click)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
+        log.info("mouseUp subtype \(event.subtype.rawValue)")
         mouseZone = nil
         mouseIsEcho = false
     }
@@ -252,7 +286,7 @@ final class OverlayView: NSView {
     // MARK: Striking
 
     private func zone(at point: CGPoint) -> Int {
-        NoteZone.zone(at: point, in: bounds.size, orientation: orientation)
+        NoteZone.zone(at: point, in: bounds.size, orientation: orientation, count: scale.degrees)
     }
 
     private func key(for touch: NSTouch) -> NSObject {
@@ -260,7 +294,7 @@ final class OverlayView: NSView {
     }
 
     private func strike(zone: Int, at point: CGPoint, from source: StrikeSource) {
-        showGlow(at: point, color: NoteZone.color(for: zone))
+        showGlow(at: point, color: NoteZone.color(for: zone, of: scale.degrees))
         delegate?.overlayView(self, didStrikeZone: zone, at: point, from: source)
     }
 
@@ -347,10 +381,10 @@ final class OverlayView: NSView {
         guidesLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
         guard showsGuides, bounds.width > 0, bounds.height > 0 else { return }
 
-        let scale = window?.backingScaleFactor ?? 2
+        let backingScale = window?.backingScaleFactor ?? 2
         let lines = CAShapeLayer()
         lines.frame = guidesLayer.bounds
-        lines.contentsScale = scale
+        lines.contentsScale = backingScale
         lines.strokeColor = NSColor.white.withAlphaComponent(0.35).cgColor
         lines.lineWidth = 1
         lines.shadowColor = NSColor.white.cgColor
@@ -359,8 +393,9 @@ final class OverlayView: NSView {
         lines.shadowOffset = .zero
 
         let path = CGMutablePath()
-        for i in 1..<NoteZone.count {
-            let fraction = CGFloat(i) / CGFloat(NoteZone.count)
+        let count = scale.degrees
+        for i in 1..<count {
+            let fraction = CGFloat(i) / CGFloat(count)
             switch orientation {
             case .vertical:
                 let y = (bounds.height * fraction).rounded() + 0.5
@@ -375,25 +410,49 @@ final class OverlayView: NSView {
         lines.path = path
         guidesLayer.addSublayer(lines)
 
-        for i in 0..<NoteZone.count {
+        for i in 0..<count {
             let label = CATextLayer()
-            label.contentsScale = scale
-            label.string = NoteZone.names[i]
+            label.contentsScale = backingScale
+            label.string = scale.names[i]
             label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
             label.fontSize = 13
             label.alignmentMode = .center
-            label.foregroundColor = NoteZone.color(for: i).withAlphaComponent(0.8).cgColor
+            label.foregroundColor = NoteZone.color(for: i, of: count).withAlphaComponent(0.8).cgColor
             let size = CGSize(width: 36, height: 18)
             switch orientation {
             case .vertical:
-                let zoneHeight = bounds.height / CGFloat(NoteZone.count)
+                let zoneHeight = bounds.height / CGFloat(count)
                 label.frame = CGRect(x: 10, y: zoneHeight * CGFloat(i) + 8, width: size.width, height: size.height)
                 label.alignmentMode = .left
             case .horizontal:
-                let zoneWidth = bounds.width / CGFloat(NoteZone.count)
+                let zoneWidth = bounds.width / CGFloat(count)
                 label.frame = CGRect(x: zoneWidth * CGFloat(i) + (zoneWidth - size.width) / 2, y: 10, width: size.width, height: size.height)
             }
             guidesLayer.addSublayer(label)
         }
+    }
+}
+
+// MARK: - Gesture recognizer delegate
+
+extension OverlayView: NSGestureRecognizerDelegate {
+    /// Keeps the recognizer out of every event that is not a finger on the screen. A trackpad
+    /// click is a mouse event with the touch subtype, and letting the recognizer take part in it
+    /// opened a touch sequence on this view that never closed (the trackpad's finger-lift is an
+    /// indirect touch this view does not accept), after which AppKit treated the view as still
+    /// exclusive and dropped later screen touches. Mouse events still reach `mouseDown` and
+    /// friends directly.
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent) -> Bool {
+        let isDirectTouch = event.type == .directTouch
+        if !isDirectTouch {
+            log.info("recognizer declining event type \(event.type.rawValue) subtype \(event.subtype.rawValue)")
+        }
+        return isDirectTouch
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: NSGestureRecognizer, shouldReceive touch: NSTouch) -> Bool {
+        let isDirect = touch.type == .direct
+        log.info("recognizer shouldReceive touch \(isDirect ? "direct" : "indirect", privacy: .public) phase \(touch.phase.rawValue): \(isDirect)")
+        return isDirect
     }
 }

@@ -7,7 +7,10 @@ import Darwin
 /// `com.apple.CoreBrightness` domain (0 = off, absent = normal). Writing it needs root,
 /// so the app installs a tiny launch daemon once (with an administrator password) that
 /// listens on a named pipe and flips that preference. The app then writes "on" or "off"
-/// into the pipe. The logo stays lit and blinks dark for a moment on each note.
+/// into the pipe. While Music Touch is on and pulsing, the logo rests dark, lights the instant a
+/// note is struck and goes dark again as the note starts to fade; it is left lit (macOS's normal
+/// state) when Music Touch is off or quits. The logo cannot be dimmed: macOS sets its brightness
+/// from the display and ambient light and exposes only the switch, so it cuts rather than fades.
 @MainActor
 final class LidLogoController {
     nonisolated static let label = "fm.beard.MusicTouch.LogoHelper"
@@ -16,18 +19,12 @@ final class LidLogoController {
     nonisolated static let scriptPath = helperDirectory + "/logo-helper.sh"
     nonisolated static let plistPath = "/Library/LaunchDaemons/\(label).plist"
 
-    static let defaultBlinkSeconds: TimeInterval = 0.3
-    static let blinkRange: ClosedRange<TimeInterval> = 0.05...1.5
-
-    /// How long the logo stays dark after a note is struck before it comes back.
-    var blinkSeconds: TimeInterval = LidLogoController.defaultBlinkSeconds
-
     private enum Lamp: String { case on, off }
 
     /// What we last asked the helper to do. The logo is normally lit, so start there.
     private var lamp: Lamp = .on
     private var pulsing = false
-    private var relightWorkItem: DispatchWorkItem?
+    private var darkenWorkItem: DispatchWorkItem?
     private let pipeQueue = DispatchQueue(label: "fm.beard.MusicTouch.logo-pipe", qos: .userInteractive)
 
     var isHelperInstalled: Bool {
@@ -44,32 +41,34 @@ final class LidLogoController {
 
     // MARK: Pulsing
 
-    /// Turns per-note blinking on or off. Either way the logo rests lit.
+    /// Turns per-note pulsing on or off. While pulsing the logo rests dark, ready to light on a
+    /// note; otherwise it is lit as macOS normally has it.
     func setPulsing(_ enabled: Bool) {
         pulsing = enabled
-        relightWorkItem?.cancel()
-        relightWorkItem = nil
-        send(.on)
+        darkenWorkItem?.cancel()
+        darkenWorkItem = nil
+        send(enabled ? .off : .on)
     }
 
-    /// Blinks the logo dark now and relights it after `blinkSeconds`. Notes that arrive while
-    /// it is dark push the relight back, so a fast run reads as one longer blink.
-    func noteStruck() {
+    /// Lights the logo now and darkens it again after `seconds`, the time the note rings at full
+    /// level before it starts to fade. Notes that arrive while it is lit push the darkening back,
+    /// so a fast run reads as one longer pulse.
+    func noteStruck(litFor seconds: TimeInterval) {
         guard pulsing else { return }
-        send(.off)
-        relightWorkItem?.cancel()
+        send(.on)
+        darkenWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, self.pulsing else { return }
-            self.send(.on)
+            self.send(.off)
         }
-        relightWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + blinkSeconds, execute: item)
+        darkenWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
     }
 
     /// Always call before quitting so the logo is never left dark.
     func restore() {
         pulsing = false
-        relightWorkItem?.cancel()
+        darkenWorkItem?.cancel()
         lamp = .off // force the write even if we believe it is already on
         send(.on)
     }
@@ -83,9 +82,14 @@ final class LidLogoController {
         }
     }
 
-    /// Writes one line to the pipe, retrying briefly if the daemon is between reads.
+    /// Writes one line to the pipe, waiting for the daemon if it is between reads.
+    ///
+    /// The daemon reopens the pipe for every line and runs `defaults` in between, which can take
+    /// a few hundred milliseconds, during which there is no reader and a non-blocking open fails.
+    /// Giving up early drops the line, which for an "off" leaves the logo lit until the next
+    /// note; so keep trying for up to a second. Calls arrive on a serial queue, so order holds.
     nonisolated private static func write(_ line: String) {
-        for attempt in 0..<8 {
+        for attempt in 0..<50 {
             let fd = open(fifoPath, O_WRONLY | O_NONBLOCK)
             if fd >= 0 {
                 defer { close(fd) }
@@ -95,7 +99,7 @@ final class LidLogoController {
                 }
                 if ok { return }
             }
-            if attempt < 7 { usleep(15_000) }
+            if attempt < 49 { usleep(20_000) }
         }
     }
 

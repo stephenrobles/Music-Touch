@@ -87,6 +87,84 @@ output and Last input without the log.
    `bindToDefaultOutputDevice()` from `PianoEngine.start()` and the device-change handler, keep
    the engine restart) and let AVAudioEngine follow the default output on its own.
 
+## Findings (2026-11-09, on the MacBook Pro)
+
+Worked through with the Debug build of this checkout; every item below was confirmed in the log
+and by Stephen tapping the screen.
+
+1. **1.0.2's "no rings anywhere" was an exception, not routing.** Direct touches do reach
+   `DirectTouchRecognizer` (`recognizer touchesBegan` logged for every finger). But reading
+   `NSTouch.normalizedPosition` on a direct touch raises `NSInternalInconsistencyException`
+   (assertion in `NSTouch.m:82`, visible as an AppKit `FAULT` in `log show`). AppKit swallows
+   it, so the handler never reached the zone, ring or strike code. Hypothesis 3 was right about
+   the property, wrong about the symptom: it does not return garbage, it throws. `deviceSize` is
+   the same class of trackpad-only property. Neither is read for `.direct` touches any more.
+2. **`touch.location(in: view)` is correct on this hardware.** With the exception gone, all 18
+   test taps (9 per orientation) resolved to the right zone from the touch's own location; the
+   event's `locationInWindow` matched it exactly, and `NSEvent.mouseLocation` did not move with
+   the finger (no synthesized click arrived while the recognizer handled the touch). The mapping
+   keeps the window and pointer spaces as fallbacks for displays that report differently, and the
+   "Last touch" line names the space that was used.
+3. **"Only the highest note plays" and "rings but no sound" were the audio graph.** The nine
+   samplers were connected straight to the `AVAudioUnitEQ`, which has one input bus, so each
+   connection replaced the previous one and only zone 8's sampler stayed wired. The engine was
+   running the whole time (no `play ignored` lines). An `AVAudioMixerNode` now sums the samplers
+   before the EQ. Hypothesis 4 (`setDeviceID`) was not the cause; the device pin stays.
+4. **Lid logo pulse was inverted from what Stephen wants.** The logo now rests dark while Music
+   Touch is on with pulsing enabled, lights on each note, and is left lit when Music Touch is
+   turned off or quits.
+5. **The logo does not fade; the "lag" was dropped pipe writes.** The app gave up writing to the
+   helper's pipe after ~120 ms, but the helper is often busy in `defaults` for longer than that,
+   so an "off" could be lost and the logo stayed lit until the next note. Writes now wait up to a
+   second. With that fixed the logo switches instantly and abruptly. `corebrightnessd`'s log
+   (`subsystem CONTAINS "CBLE"`, category `bklb-backlight`) shows why: the logo is a PWM
+   backlight whose nits follow the display brightness and ambient light, and `LEBacklightMode`
+   is the only preference the mode store reads (`mode 0; from defaults` = off, `mode 2; from
+   NVRAM` = normal). Mode 0 is applied as "Setting PWM to: OFF (duty cycle 0)" with the ramp
+   completing at once, so off never fades. The module does own ramps, but only for its own
+   transitions: a sleep/wake factor fade (0.14–0.28 s), a rate limiter that occasionally eases
+   a large rise (the fade-in Stephen sometimes sees after "on"), and ambient-light restriction
+   ramps. The other keys it reads (`LEPWMFollowFallRateTable`, `LEPWMRestrictionFallDuration`,
+   `LEPWMLuxToMaxNitsRestrictionMapping`, …) are undocumented brightness-policy tables loaded
+   at daemon start, so a fade could only be faked by rewriting system brightness policy per
+   note. Not worth it. The pulse follows the note's envelope instead: lit through the note's
+   hold (40% of the Note length), off as the note starts to fade. The Blink length slider from
+   1.0.2 is gone, since it tuned a fade that does not exist.
+6. **A trackpad click on the overlay stopped screen touches.** WindowServer kept dispatching
+   touchscreen contacts, but after one trackpad click on the overlay none reached the
+   recognizer, and AppKit's Gestures framework later logged a touch sequence stuck in one phase
+   for 40 s followed by "Marking view as no longer exclusive". The click (a mouse event with the
+   touch subtype) entered the recognizer's gesture environment and the sequence never closed,
+   since the trackpad's finger-lift is an indirect touch the overlay does not accept, so the
+   view stayed exclusive and direct touches were dropped. The recognizer's delegate now declines
+   every event that is not a direct-touch event; mouse events still reach `mouseDown`. Verified
+   with tap, click, tap: the later taps play.
+
+Not reproduced here: 1.0.1's top-zone-only ring. The window/level/key-window ideas in hypothesis
+1 were not needed; the non-activating `NSPanel` at level 23 receives direct touches as is.
+
+## Hand-off to the Mac Studio (2026-11-09)
+
+Everything above is fixed and committed, with Settings › Key (root, major/minor, 8–12 zones) and
+a resizable Settings window added on top. Version is bumped to 1.1.0 (build 4) in both targets,
+`release-notes/1.1.0.html` and the App Store "What's New" are written, and `Tools/appstore.mjs`
+now takes its version from the project and has a `withdraw` command that cancels the pending
+review submission. This MacBook Pro has no Developer ID certificate, Sparkle key, notarytool
+profile, App Store Connect key, beardfm.app checkout, `gh` or `node`, so the release itself runs
+on the Mac Studio:
+
+```bash
+git pull
+Tools/release.sh --notarize --upload
+(cd ~/Movies/Apps/beardfm.app && git add -A && git commit -m "Music Touch 1.1.0" && git push)
+gh release create v1.1.0 "dist/Music Touch 1.1.0.dmg" --title "Music Touch 1.1.0" --notes-file release-notes/1.1.0.html
+node Tools/appstore.mjs withdraw     # pulls 1.0.2 out of review (Developer Rejected)
+Tools/archive-appstore.sh            # archives and uploads build 4
+node Tools/appstore.mjs metadata     # What's New for 1.1.0, renames the editable version
+node Tools/appstore.mjs attach       # once build 4 shows as processed (status)
+node Tools/appstore.mjs submit
+```
+
 ## Rules
 
 - Do not run `Tools/archive-appstore.sh`, `xcodebuild archive`, `-exportArchive` or any upload to

@@ -24,6 +24,11 @@ final class OverlayController: OverlayViewDelegate {
         set { view.showsGuides = newValue }
     }
 
+    var scale: Scale {
+        get { view.scale }
+        set { view.scale = newValue }
+    }
+
     private(set) var isShowing = false
     private var panel: OverlayPanel?
     private let view = OverlayView(frame: .zero)

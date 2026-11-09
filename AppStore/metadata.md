@@ -20,7 +20,7 @@ Everything entered in App Store Connect for 1.0, kept here as the source of trut
 - **Marketing URL:** https://beardfm.app/music-touch/
 - **App privacy:** Data Not Collected
 
-## Version Information (1.0)
+## Version Information (1.1.0)
 
 **Promotional text (170):**
 Turn the whole screen into a piano. Touch anywhere on your MacBook Pro's display to play the C major scale, with a glowing ring on every touch. Free and open source.
@@ -53,8 +53,8 @@ Music Touch is free and open source under the MIT license.
 **Keywords (100):**
 piano,touchscreen,touch,music,keyboard,notes,scale,instrument,menu bar,play,fun,glow,kids
 
-**What's New (1.0):**
-First release.
+**What's New (1.1.0):**
+Choose a key and a mode: any root from C to B, major or natural minor, with the zone labels spelled for the key. Choose how many zones share the screen, from one octave (8 notes) up to 12. On the MacBook Pro with Touchscreen, taps now play every zone and every zone makes a sound. The Settings window can be resized vertically.
 
 **Support URL:** https://beardfm.app/support/?app=music-touch
 **Marketing URL:** https://beardfm.app/music-touch/

@@ -38,33 +38,37 @@ struct SettingsView: View {
             } header: {
                 Text("Playing")
             } footer: {
-                Text("While on, the whole built-in screen plays the C major scale from middle C (C4) to the D above the octave (D5), low notes first. Several fingers play a chord, and sliding across a boundary plays the next note. Content under the overlay is not clickable until you turn Music Touch off.")
+                Text("While on, the whole built-in screen is divided into note zones playing the chosen scale upwards from its root, low notes first. Several fingers play a chord, and sliding across a boundary plays the next note. Content under the overlay is not clickable until you turn Music Touch off.")
+            }
+
+            Section {
+                Picker("Key", selection: $state.keyRoot) {
+                    ForEach(KeyRoot.allCases) { root in
+                        Text(root.name(in: state.scaleMode)).tag(root)
+                    }
+                }
+                Picker("Mode", selection: $state.scaleMode) {
+                    ForEach(ScaleMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Zones", selection: $state.zoneCount) {
+                    ForEach(Array(Scale.degreeRange), id: \.self) { count in
+                        Text(Scale.degreesLabel(count)).tag(count)
+                    }
+                }
+                LabeledContent("Notes", value: state.scale.names.joined(separator: "  "))
+                    .monospacedDigit()
+            } header: {
+                Text("Key")
+            } footer: {
+                Text("The screen is split evenly into the chosen number of zones, playing the \(state.scale.title) scale from the root upwards; one octave runs root to root, more zones keep climbing. Minor is the natural minor. Keys from G up start below middle C so every key sits in the same range.")
             }
 
             Section {
                 if state.canControlLidLogo {
                     Toggle("Pulse the Apple logo on the lid", isOn: $state.pulsesLogo)
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text("Blink length")
-                            Spacer()
-                            Text(String(format: "%.2f s", state.logoBlinkSeconds))
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: $state.logoBlinkSeconds, in: LidLogoController.blinkRange, step: 0.05) {
-                            Text("Blink length")
-                        } minimumValueLabel: {
-                            Text("Quick")
-                        } maximumValueLabel: {
-                            Text("Slow")
-                        }
-                        .labelsHidden()
-                        Text("How long the logo stays dark after each note before it comes back. The logo itself fades, so very short values may not be visible.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                    .disabled(!state.pulsesLogo)
 
                     LabeledContent("Helper") {
                         HStack(spacing: 6) {
@@ -97,9 +101,9 @@ struct SettingsView: View {
                 Text("Apple Logo")
             } footer: {
                 if state.canControlLidLogo {
-                    Text("macOS only lets the lid logo be switched off or on, through a system preference that needs an administrator password. The helper is a tiny launch daemon that flips that preference on request. With pulsing on, the logo blinks dark for a moment on each note and comes straight back. It is left lit when Music Touch is turned off or quits.")
+                    Text("macOS only lets the lid logo be switched off or on, through a system preference that needs an administrator password. The helper is a tiny launch daemon that flips that preference on request. With pulsing on, the logo rests dark while Music Touch is on, lights the instant a note is struck and goes dark again as the note starts to fade, so a longer Note length keeps it lit longer. macOS sets the logo's brightness itself, so it switches rather than fades. It is left lit when Music Touch is turned off or quits.")
                 } else {
-                    Text("On a MacBook Pro with PROLED XDR Display, the direct-download version can blink the illuminated Apple logo on each note.")
+                    Text("On a MacBook Pro with PROLED XDR Display, the direct-download version can light the illuminated Apple logo on each note.")
                 }
             }
 
@@ -138,8 +142,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
-        .fixedSize(horizontal: false, vertical: true)
+        // The window (SettingsWindowController) fixes the width and lets the height vary; the
+        // grouped form scrolls when the window is shorter than its content.
+        .frame(width: SettingsWindowController.width)
         .onAppear {
             state.refreshHelperStatus()
             NSApp.activate()
@@ -154,5 +159,48 @@ struct SettingsView: View {
     private var helperColor: Color {
         if !state.logoHelperInstalled { return .secondary }
         return state.logoHelperRunning ? .green : .orange
+    }
+}
+
+/// Shows Settings in a window the app owns: fixed width, any height from `minHeight` up, with
+/// the resizable style set at creation. The SwiftUI `Settings` scene would not let its window
+/// resize on macOS 27 and widened it once the content's height became flexible.
+@MainActor
+final class SettingsWindowController {
+    static let shared = SettingsWindowController()
+
+    static let width: CGFloat = 520
+    static let minHeight: CGFloat = 420
+    static let defaultHeight: CGFloat = 820
+    private static let autosaveName = "MusicTouchSettings"
+
+    private var window: NSWindow?
+
+    func show(state: AppState) {
+        if window == nil {
+            window = makeWindow(state: state)
+        }
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
+    private func makeWindow(state: AppState) -> NSWindow {
+        let hosting = NSHostingController(rootView: SettingsView(state: state))
+        // The window, not SwiftUI, decides the size: SwiftUI would otherwise resize it back to the
+        // content's ideal size after every change.
+        hosting.sizingOptions = []
+
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "Music Touch Settings"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.isReleasedWhenClosed = false
+        window.contentMinSize = NSSize(width: Self.width, height: Self.minHeight)
+        window.contentMaxSize = NSSize(width: Self.width, height: 10_000)
+        if !window.setFrameUsingName(Self.autosaveName) {
+            window.setContentSize(NSSize(width: Self.width, height: Self.defaultHeight))
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.autosaveName)
+        return window
     }
 }

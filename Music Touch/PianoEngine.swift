@@ -18,22 +18,31 @@ final class PianoEngine {
 
     /// Fraction of `noteLength` spent at full level before the fade begins.
     private let holdFraction = 0.4
+
+    /// How long a struck note rings at full level before it starts to fade.
+    var holdLength: TimeInterval { noteLength * holdFraction }
     private let fadeStep: TimeInterval = 0.025
 
     private let engine = AVAudioEngine()
     private var samplers: [AVAudioUnitSampler] = []
+    /// Sums the samplers. The EQ that follows has a single input bus, so connecting the
+    /// samplers to it directly leaves only the last one wired up; a mixer gives each its own bus.
+    private let sum = AVAudioMixerNode()
     private let tone = AVAudioUnitEQ(numberOfBands: 1)
     private let reverb = AVAudioUnitReverb()
 
-    private var generations = [Int](repeating: 0, count: NoteZone.count)
-    private var holdItems = [DispatchWorkItem?](repeating: nil, count: NoteZone.count)
-    private var fadeTimers = [Timer?](repeating: nil, count: NoteZone.count)
+    private var generations = [Int](repeating: 0, count: Scale.degreeRange.upperBound)
+    private var holdItems = [DispatchWorkItem?](repeating: nil, count: Scale.degreeRange.upperBound)
+    private var fadeTimers = [Timer?](repeating: nil, count: Scale.degreeRange.upperBound)
     private var pauseWorkItem: DispatchWorkItem?
     private var wantsRunning = false
     private(set) var instrumentLoaded = false
 
     /// True while the audio engine is running (it is started when Music Touch is turned on).
     var isRunning: Bool { engine.isRunning }
+
+    /// Which notes the zones play. Notes already ringing keep their pitch when it changes.
+    var scale: Scale = .default
 
     /// Called on the main thread when the system's default output device changes.
     var onOutputDeviceChange: (() -> Void)?
@@ -60,16 +69,19 @@ final class PianoEngine {
         "/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
 
     init() {
+        engine.attach(sum)
         engine.attach(tone)
         engine.attach(reverb)
 
         do {
-            for _ in 0..<NoteZone.count {
+            // One sampler per possible zone, so changing the zone count never rewires the graph.
+            for _ in 0..<Scale.degreeRange.upperBound {
                 let sampler = AVAudioUnitSampler()
                 engine.attach(sampler)
-                try engine.connectNode(sampler, to: tone, format: nil)
+                try engine.connectNode(sampler, to: sum, format: nil)
                 samplers.append(sampler)
             }
+            try engine.connectNode(sum, to: tone, format: nil)
             try engine.connectNode(tone, to: reverb, format: nil)
             try engine.connectNode(reverb, to: engine.mainMixerNode, format: nil)
         } catch {
@@ -87,6 +99,7 @@ final class PianoEngine {
         reverb.loadFactoryPreset(.largeHall2)
         reverb.wetDryMix = 42
 
+        sum.outputVolume = 1
         engine.mainMixerNode.outputVolume = 0.9
 
         // Follow the system's default output device: whatever is chosen in Sound settings or the
@@ -200,12 +213,12 @@ final class PianoEngine {
     }
 
     func play(zone: Int, velocity: UInt8 = 92) {
-        guard engine.isRunning, samplers.indices.contains(zone) else {
+        guard engine.isRunning, samplers.indices.contains(zone), scale.midiNotes.indices.contains(zone) else {
             log.error("play ignored: engine running \(self.engine.isRunning), instrument loaded \(self.instrumentLoaded), output \(self.outputDeviceName, privacy: .public)")
             return
         }
         let sampler = samplers[zone]
-        let note = NoteZone.midiNote(for: zone)
+        let note = scale.midiNotes[zone]
 
         generations[zone] += 1
         let generation = generations[zone]

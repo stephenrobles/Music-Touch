@@ -3,19 +3,24 @@
 ![Music Touch playing a rising scale: nine horizontal note zones with coloured rings spreading from each touch](AppStore/screenshots/mac-01-vertical.png)
 
 A free Mac menu bar utility that turns the touchscreen on the MacBook Pro with PROLED XDR Display
-into a piano. Turn it on and the whole screen becomes nine note zones playing the C major scale from
-middle C (C4) up to the D above the octave (D5). Touch anywhere to play, use several fingers for a
+into a piano. Turn it on and the whole screen becomes note zones playing a scale, nine zones of C
+major from middle C (C4) up to the D above the octave (D5) by default. Touch anywhere to play, use several fingers for a
 chord, or slide across the zones for a glissando. Every touch sends out a glowing ring in that note's
 colour.
 
 - **Menu bar only.** No Dock icon. Toggle it from the menu or anywhere with ⌃⌥⌘M.
-- **Nine zones, one scale.** C4 D4 E4 F4 G4 A4 B4 C5 D5, bottom to top, or left to right in
-  horizontal mode. Optional separator lines with note names.
+- **Zones up the scale.** The root upwards, one zone per scale degree (C4 D4 E4 F4 G4 A4 B4 C5
+  D5 in C major), bottom to top, or left to right in horizontal mode. Optional separator lines
+  with note names.
+- **Any key, major or minor, 8 to 12 zones.** Settings › Key picks the root (C through B,
+  spelled for the key), major or natural minor, and how many zones share the screen: one octave
+  (8 notes) up to 12. The zones resize evenly and their labels follow.
 - **A soft piano.** The system's General MIDI grand piano, mellowed with a low-pass filter and a
   long hall reverb. Each zone has its own sampler so notes fade independently; the note length is
   adjustable in Settings.
-- **Lid logo blink.** On a MacBook Pro with the illuminated Apple logo, the logo can blink with
-  each note: dark the instant you play, back a moment later (direct-download version only, see below).
+- **Lid logo pulse.** On a MacBook Pro with the illuminated Apple logo, the logo can pulse with
+  each note: it rests dark while Music Touch is on, lights the instant you play and goes dark again
+  as the note starts to fade (direct-download version only, see below).
 - **Plays through the current output.** Notes go to the Mac's default audio output and follow it
   when you switch to headphones, AirPods or a display.
 - **Blocks the screen while on.** The overlay sits above every window and the Dock, just under the
@@ -40,16 +45,18 @@ forwards every touch to the view. Clicks still work for Macs without a touchscre
 macOS synthesizes for a tap is recognised as an echo of the finger and ignored, so a tap plays once.
 Settings › Status shows whether the last note came from a touch or a click.
 
-## How the lid logo blink works
+## How the lid logo pulse works
 
 macOS exposes exactly one control for the lid logo: the `LEBacklightMode` preference in the root
 `com.apple.CoreBrightness` domain, documented in
 [Apple's support article](https://support.apple.com/en-us/149248). Writing it needs root, so
 Settings › Apple Logo › Install Helper… installs a tiny launch daemon (with your administrator
 password, once). It listens on a named pipe at `/Users/Shared/MusicTouch/logo-control` for the words
-`on` and `off` and flips that preference. The app switches the logo off the instant a note is
-struck and back on about a third of a second later, and leaves it lit when Music Touch is turned
-off or quits. Uninstall Helper… removes everything and leaves the logo lit.
+`on` and `off` and flips that preference. While Music Touch is on with pulsing enabled the app
+keeps the logo dark, switches it on the instant a note is struck and off again when the note
+starts to fade (40% of the Note length), and leaves it lit when Music Touch is turned off or
+quits. macOS sets the logo's brightness from the display and ambient light and exposes only the
+switch, so the logo cuts rather than fades. Uninstall Helper… removes everything and leaves the logo lit.
 
 ## Building
 
@@ -80,7 +87,7 @@ uploads the App Store target.
 | `OverlayController.swift` | The full-screen, non-activating panel over the touchscreen |
 | `OverlayView.swift` | Direct-touch gesture recognizer and mouse handling, glissando tracking, rings and separator lines |
 | `NoteZone.swift` | Zone geometry, MIDI notes, note names and colours |
-| `PianoEngine.swift` | AVAudioEngine graph: nine samplers, low-pass, reverb, per-zone fades; follows the default output device |
+| `PianoEngine.swift` | AVAudioEngine graph: one sampler per zone, low-pass, reverb, per-zone fades; follows the default output device |
 | `LidLogoController.swift` | Lid logo blink and the privileged helper installer |
 | `AppUpdater.swift` | Sparkle updater for the direct download (a stub in the App Store build) |
 | `GlobalHotKey.swift` | Carbon hot key for ⌃⌥⌘M |
