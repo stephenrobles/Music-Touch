@@ -247,6 +247,10 @@ async function attach() {
   const builds = await get(`/builds?filter[app]=${a.id}&filter[preReleaseVersion.platform]=${PLATFORM}&sort=-uploadedDate&limit=10`);
   const build = builds.data.find((b) => b.attributes.processingState === "VALID");
   if (!build) { console.log(`no processed build yet (${builds.data.map((b) => b.attributes.version + ":" + b.attributes.processingState).join(", ") || "none"})`); process.exitCode = 2; return; }
+  // The app has no encryption beyond what macOS provides, so no export compliance documentation is needed.
+  if (build.attributes.usesNonExemptEncryption !== false) {
+    await patch(`/builds/${build.id}`, { data: { type: "builds", id: build.id, attributes: { usesNonExemptEncryption: false } } });
+  }
   await patch(`/appStoreVersions/${v.id}/relationships/build`, { data: { type: "builds", id: build.id } });
   console.log(`attached build ${build.attributes.version} (${build.id})`);
 }
