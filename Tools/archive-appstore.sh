@@ -2,6 +2,7 @@
 # Archives the sandboxed Mac App Store build of Music Touch and uploads it to App Store Connect.
 # Usage: Tools/archive-appstore.sh          (run only when Stephen asks for an upload)
 #
+# The "Music Touch App Store" target is the sandboxed build without Sparkle (APPSTORE condition).
 # xcodebuild on this Mac cannot provision through Xcode's signed-in account, so the archive is built
 # unsigned, ad-hoc signed with the App Store entitlements (App Sandbox), and exported with the
 # App Store Connect API key, which handles signing and the upload.
@@ -14,9 +15,9 @@ mkdir -p build/archives
 rm -rf "$ARCHIVE" build/upload
 
 echo "== archive (sandboxed)"
-xcodebuild -project "Music Touch.xcodeproj" -scheme "Music Touch" -configuration Release -destination "generic/platform=macOS" \
+xcodebuild -project "Music Touch.xcodeproj" -scheme "Music Touch App Store" -configuration Release -destination "generic/platform=macOS" \
   -archivePath "$ARCHIVE" -derivedDataPath build/dd-archive \
-  CODE_SIGNING_ALLOWED=NO ENABLE_APP_SANDBOX=YES CODE_SIGN_ENTITLEMENTS=Config/MusicTouch-AppStore.entitlements archive 2>&1 | grep -E "error:|ARCHIVE" | sort -u
+  CODE_SIGNING_ALLOWED=NO archive 2>&1 | grep -E "error:|ARCHIVE" | sort -u
 codesign --force -s - --entitlements Config/MusicTouch-AppStore.entitlements "$ARCHIVE/Products/Applications/Music Touch.app"
 
 echo "== export and upload"

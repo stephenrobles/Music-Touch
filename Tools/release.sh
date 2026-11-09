@@ -7,8 +7,10 @@
 #                the team-wide profile shared with Stephen's other apps). Create one with:
 #                xcrun notarytool store-credentials <name> --apple-id you@example.com --team-id J9228F689B
 #   --upload     (requires --notarize) copies the DMG into the beardfm.app site as
-#                downloads/Music-Touch-<version>.dmg and downloads/Music-Touch.dmg. Commit and push the
-#                site afterwards; Cloudflare builds and deploys from main.
+#                downloads/Music-Touch-<version>.dmg and downloads/Music-Touch.dmg, signs it for Sparkle
+#                with the EdDSA key in the keychain (account "musictouch") and adds the release to
+#                site/static/music-touch/appcast.xml, with release-notes/<version>.html as the notes when
+#                present. Commit and push the site afterwards; Cloudflare builds and deploys from main.
 #
 # Output: dist/Music Touch <version>.dmg
 set -euo pipefail
@@ -47,8 +49,19 @@ DEVID=$(security find-identity -v -p codesigning | grep -o '"Developer ID Applic
 [[ -n "$DEVID" ]] || { echo "No Developer ID Application certificate found in the keychain."; exit 1; }
 echo "▶ Signing with $DEVID"
 # No entitlements: the direct build is unsandboxed and needs no hardened-runtime exceptions.
-codesign --force --options runtime --timestamp --sign "$DEVID" "$APP"
-codesign --verify --strict --verbose=2 "$APP"
+# Sparkle's nested components are signed inside-out first; a Developer ID app may not contain
+# anything signed by someone else, and notarization checks every executable.
+sign() { codesign --force --options runtime --timestamp --sign "$DEVID" "$@"; }
+SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+if [[ -d "$SPARKLE" ]]; then
+  sign "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+  sign --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+  sign "$SPARKLE/Versions/B/Autoupdate"
+  sign "$SPARKLE/Versions/B/Updater.app"
+  sign "$SPARKLE"
+fi
+sign "$APP"
+codesign --verify --strict --deep --verbose=2 "$APP"
 
 if [[ $NOTARIZE -eq 1 ]]; then
   echo "▶ Notarizing app…"
@@ -78,8 +91,19 @@ if [[ $UPLOAD -eq 1 ]]; then
   [[ -d "$SITE/site/static" ]] || { echo "beardfm.app site not found at $SITE (set BEARDFM_SITE)."; exit 1; }
   echo "▶ Copying into beardfm.app…"
   mkdir -p "$SITE/site/static/downloads"
-  cp "$DMG" "$SITE/site/static/downloads/Music-Touch-$VERSION.dmg"
+  UPDATE_NAME="Music-Touch-$VERSION.dmg"
+  cp "$DMG" "$SITE/site/static/downloads/$UPDATE_NAME"
   cp "$DMG" "$SITE/site/static/downloads/Music-Touch.dmg"
+
+  echo "▶ Signing for Sparkle and updating the appcast…"
+  SPARKLE_BIN=$(find "$BUILD/DerivedData/SourcePackages/artifacts" -type d -name bin -path "*parkle*" | head -1)
+  [[ -n "$SPARKLE_BIN" ]] || { echo "Sparkle tools not found under DerivedData."; exit 1; }
+  SIGNATURE=$("$SPARKLE_BIN/sign_update" --account musictouch "$DMG")
+  MIN_MACOS=$(/usr/libexec/PlistBuddy -c "Print LSMinimumSystemVersion" "$APP/Contents/Info.plist")
+  NOTES=()
+  [[ -f "$ROOT/release-notes/$VERSION.html" ]] && NOTES=("$ROOT/release-notes/$VERSION.html")
+  "$ROOT/Tools/update-appcast.py" "$SITE/site/static/music-touch/appcast.xml" "$VERSION" "$BUILDNUM" "$MIN_MACOS" \
+    "https://beardfm.app/downloads/$UPDATE_NAME" "$SIGNATURE" "${NOTES[@]}"
   echo "▶ Copied. Commit and push the beardfm.app changes to publish."
 fi
 

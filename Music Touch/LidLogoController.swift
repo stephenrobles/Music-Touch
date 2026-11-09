@@ -7,7 +7,7 @@ import Darwin
 /// `com.apple.CoreBrightness` domain (0 = off, absent = normal). Writing it needs root,
 /// so the app installs a tiny launch daemon once (with an administrator password) that
 /// listens on a named pipe and flips that preference. The app then writes "on" or "off"
-/// into the pipe. The logo is off while idle and lit while a note plays.
+/// into the pipe. The logo stays lit and blinks dark for a moment on each note.
 @MainActor
 final class LidLogoController {
     nonisolated static let label = "fm.beard.MusicTouch.LogoHelper"
@@ -16,15 +16,15 @@ final class LidLogoController {
     nonisolated static let scriptPath = helperDirectory + "/logo-helper.sh"
     nonisolated static let plistPath = "/Library/LaunchDaemons/\(label).plist"
 
-    /// How long the logo stays lit after the last note is struck.
-    var holdSeconds: TimeInterval = 1.4
+    /// How long the logo stays dark after a note is struck before it comes back.
+    var blinkSeconds: TimeInterval = 0.3
 
     private enum Lamp: String { case on, off }
 
     /// What we last asked the helper to do. The logo is normally lit, so start there.
     private var lamp: Lamp = .on
-    private var idleDimmed = false
-    private var dimWorkItem: DispatchWorkItem?
+    private var pulsing = false
+    private var relightWorkItem: DispatchWorkItem?
     private let pipeQueue = DispatchQueue(label: "fm.beard.MusicTouch.logo-pipe", qos: .userInteractive)
 
     var isHelperInstalled: Bool {
@@ -41,31 +41,32 @@ final class LidLogoController {
 
     // MARK: Pulsing
 
-    /// Puts the logo in its resting state for the utility: dark when pulsing is on, lit otherwise.
-    func setIdleDimmed(_ dimmed: Bool) {
-        idleDimmed = dimmed
-        dimWorkItem?.cancel()
-        dimWorkItem = nil
-        send(dimmed ? .off : .on)
+    /// Turns per-note blinking on or off. Either way the logo rests lit.
+    func setPulsing(_ enabled: Bool) {
+        pulsing = enabled
+        relightWorkItem?.cancel()
+        relightWorkItem = nil
+        send(.on)
     }
 
-    /// Lights the logo now and schedules it to go dark again after `holdSeconds`.
+    /// Blinks the logo dark now and relights it after `blinkSeconds`. Notes that arrive while
+    /// it is dark push the relight back, so a fast run reads as one longer blink.
     func noteStruck() {
-        guard idleDimmed else { return }
-        send(.on)
-        dimWorkItem?.cancel()
+        guard pulsing else { return }
+        send(.off)
+        relightWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            guard let self, self.idleDimmed else { return }
-            self.send(.off)
+            guard let self, self.pulsing else { return }
+            self.send(.on)
         }
-        dimWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + holdSeconds, execute: item)
+        relightWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + blinkSeconds, execute: item)
     }
 
     /// Always call before quitting so the logo is never left dark.
     func restore() {
-        idleDimmed = false
-        dimWorkItem?.cancel()
+        pulsing = false
+        relightWorkItem?.cancel()
         lamp = .off // force the write even if we believe it is already on
         send(.on)
     }

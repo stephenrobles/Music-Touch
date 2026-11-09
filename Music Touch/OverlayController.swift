@@ -8,7 +8,7 @@ final class OverlayPanel: NSPanel {
 
 @MainActor
 final class OverlayController: OverlayViewDelegate {
-    var onStrike: ((Int, CGPoint) -> Void)?
+    var onStrike: ((Int, CGPoint, StrikeSource) -> Void)?
 
     var orientation: ZoneOrientation {
         get { view.orientation }
@@ -99,7 +99,7 @@ final class OverlayController: OverlayViewDelegate {
         reposition(panel)
     }
 
-    func overlayView(_ view: OverlayView, didStrikeZone zone: Int, at point: CGPoint) {
-        onStrike?(zone, point)
+    func overlayView(_ view: OverlayView, didStrikeZone zone: Int, at point: CGPoint, from source: StrikeSource) {
+        onStrike?(zone, point, source)
     }
 }

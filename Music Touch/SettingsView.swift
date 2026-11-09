@@ -76,15 +76,37 @@ struct SettingsView: View {
                 Text("Apple Logo")
             } footer: {
                 if state.canControlLidLogo {
-                    Text("macOS only lets the lid logo be switched off or on, through a system preference that needs an administrator password. The helper is a tiny launch daemon that flips that preference on request. With pulsing on, the logo stays dark while Music Touch is on and lights up for each note. It is restored when Music Touch is turned off or quits.")
+                    Text("macOS only lets the lid logo be switched off or on, through a system preference that needs an administrator password. The helper is a tiny launch daemon that flips that preference on request. With pulsing on, the logo blinks dark for a moment on each note and comes straight back. It is left lit when Music Touch is turned off or quits.")
                 } else {
-                    Text("On a MacBook Pro with PROLED XDR Display, the direct-download version can dim the illuminated Apple logo while Music Touch is on and light it for each note.")
+                    Text("On a MacBook Pro with PROLED XDR Display, the direct-download version can blink the illuminated Apple logo on each note.")
                 }
             }
 
-            Section("Status") {
+            if AppUpdater.isAvailable {
+                Section {
+                    Toggle("Check for updates automatically", isOn: Binding(
+                        get: { state.updater.automaticallyChecksForUpdates },
+                        set: { state.updater.automaticallyChecksForUpdates = $0 }
+                    ))
+                    Button("Check for Updates…") { state.updater.checkForUpdates() }
+                        .disabled(!state.updater.canCheckForUpdates)
+                } header: {
+                    Text("Updates")
+                } footer: {
+                    Text("Updates come from beardfm.app and are verified before they install.")
+                }
+            }
+
+            Section {
                 LabeledContent("Touchscreen", value: state.hasTouchscreen ? "Detected" : "Not detected (clicks and drags still play)")
                 LabeledContent("Piano", value: state.pianoLoaded ? "System grand piano loaded" : "Not loaded")
+                LabeledContent("Audio engine", value: state.isEnabled ? (state.audioRunning ? "Running" : "Not running") : "Idle until Music Touch is on")
+                LabeledContent("Audio output", value: state.audioOutputName)
+                LabeledContent("Last input", value: state.lastInputDescription)
+            } header: {
+                Text("Status")
+            } footer: {
+                Text("Notes play through the Mac's current default output, and follow it when it changes. Last input shows whether the most recent note came from a finger on the screen or from a click, with the note it played.")
             }
         }
         .formStyle(.grouped)

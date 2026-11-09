@@ -14,11 +14,13 @@ colour.
 - **A soft piano.** The system's General MIDI grand piano, mellowed with a low-pass filter and a
   long hall reverb. Each zone has its own sampler so notes fade independently; the note length is
   adjustable in Settings.
-- **Lid logo pulse.** On a MacBook Pro with the illuminated Apple logo, the logo can go dark while
-  Music Touch is on and light up with each note (direct-download version only, see below).
+- **Lid logo blink.** On a MacBook Pro with the illuminated Apple logo, the logo can blink with
+  each note: dark the instant you play, back a moment later (direct-download version only, see below).
+- **Plays through the current output.** Notes go to the Mac's default audio output and follow it
+  when you switch to headphones, AirPods or a display.
 - **Blocks the screen while on.** The overlay sits above every window and the Dock, just under the
   menu bar, so a touch never lands in the app underneath. Turn Music Touch off to get back to work.
-- Works with a mouse or trackpad too, so it runs on any Mac with macOS 26 or later.
+- Works with a mouse or trackpad too, so it runs on any Mac with macOS 27 or later.
 
 Nothing is collected or sent anywhere. There is no account, no analytics and no network access.
 
@@ -29,20 +31,38 @@ Nothing is collected or sent anywhere. There is no account, no analytics and no 
 - **Mac App Store**: the same app, sandboxed, without the lid-logo helper (the sandbox doesn't allow
   installing a launch daemon).
 
-## How the lid logo pulse works
+## How touches arrive
+
+macOS 27 delivers finger touches to an app only through gesture recognizers, never through the
+responder chain's `touchesBegan(with:)` or event monitors (Apple Technote TN3212). The overlay
+therefore installs a tiny `NSGestureRecognizer` subclass with `allowedTouchTypes = .direct` that
+forwards every touch to the view. Clicks still work for Macs without a touchscreen, and the click
+macOS synthesizes for a tap is recognised as an echo of the finger and ignored, so a tap plays once.
+Settings › Status shows whether the last note came from a touch or a click.
+
+## How the lid logo blink works
 
 macOS exposes exactly one control for the lid logo: the `LEBacklightMode` preference in the root
 `com.apple.CoreBrightness` domain, documented in
 [Apple's support article](https://support.apple.com/en-us/149248). Writing it needs root, so
 Settings › Apple Logo › Install Helper… installs a tiny launch daemon (with your administrator
 password, once). It listens on a named pipe at `/Users/Shared/MusicTouch/logo-control` for the words
-`on` and `off` and flips that preference. The app keeps the logo dark while it is on and lights it
-for each note, and always restores it when Music Touch is turned off or quits. Uninstall Helper…
-removes everything and restores the logo.
+`on` and `off` and flips that preference. The app switches the logo off the instant a note is
+struck and back on about a third of a second later, and leaves it lit when Music Touch is turned
+off or quits. Uninstall Helper… removes everything and leaves the logo lit.
 
 ## Building
 
-Open `Music Touch.xcodeproj` in Xcode 27 or later and run. The project has no dependencies.
+Open `Music Touch.xcodeproj` in Xcode 27 or later and run. There are two targets:
+
+- **Music Touch**: the direct download. Links [Sparkle](https://sparkle-project.org) for in-app
+  updates from `https://beardfm.app/music-touch/appcast.xml` (`Config/Info.plist`).
+- **Music Touch App Store**: the same sources built with the `APPSTORE` condition, sandboxed and
+  without Sparkle; the App Store delivers its updates.
+
+`Tools/release.sh --notarize --upload` builds, signs and notarizes the DMG, signs it for Sparkle and
+adds it to the appcast in the beardfm.app site checkout; `Tools/archive-appstore.sh` archives and
+uploads the App Store target.
 
 - `Tools/release.sh [--notarize] [--upload]` builds a Release app signed with Developer ID, packages
   a DMG, and optionally notarizes it and copies it into the beardfm.app site checkout.
@@ -58,10 +78,11 @@ Open `Music Touch.xcodeproj` in Xcode 27 or later and run. The project has no de
 | `MusicTouchApp.swift` | App entry, menu bar menu, Settings scene |
 | `AppState.swift` | Settings persistence and the on/off state; wires overlay, audio, logo and hotkey together |
 | `OverlayController.swift` | The full-screen, non-activating panel over the touchscreen |
-| `OverlayView.swift` | Direct-touch and mouse handling, glissando tracking, rings and separator lines |
+| `OverlayView.swift` | Direct-touch gesture recognizer and mouse handling, glissando tracking, rings and separator lines |
 | `NoteZone.swift` | Zone geometry, MIDI notes, note names and colours |
-| `PianoEngine.swift` | AVAudioEngine graph: nine samplers, low-pass, reverb, per-zone fades |
-| `LidLogoController.swift` | Lid logo state machine and the privileged helper installer |
+| `PianoEngine.swift` | AVAudioEngine graph: nine samplers, low-pass, reverb, per-zone fades; follows the default output device |
+| `LidLogoController.swift` | Lid logo blink and the privileged helper installer |
+| `AppUpdater.swift` | Sparkle updater for the direct download (a stub in the App Store build) |
 | `GlobalHotKey.swift` | Carbon hot key for ⌃⌥⌘M |
 | `SettingsView.swift` | The Settings window |
 

@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 
 /// A soft, reverberant piano built from the system General MIDI sound bank.
 ///
@@ -29,6 +30,30 @@ final class PianoEngine {
     private var pauseWorkItem: DispatchWorkItem?
     private var wantsRunning = false
     private(set) var instrumentLoaded = false
+
+    /// True while the audio engine is running (it is started when Music Touch is turned on).
+    var isRunning: Bool { engine.isRunning }
+
+    /// Called on the main thread when the system's default output device changes.
+    var onOutputDeviceChange: (() -> Void)?
+
+    /// Name of the device the engine plays through, for Settings › Status.
+    var outputDeviceName: String {
+        let id = engine.outputNode.auAudioUnit.deviceID
+        guard id != 0 else { return "System default" }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &name) { pointer in
+            AudioObjectGetPropertyData(id, &address, 0, nil, &size, pointer)
+        }
+        guard status == noErr, let name else { return "Device \(id)" }
+        return name.takeRetainedValue() as String
+    }
 
     private static let soundBankURL = URL(fileURLWithPath:
         "/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
@@ -62,6 +87,20 @@ final class PianoEngine {
         reverb.wetDryMix = 42
 
         engine.mainMixerNode.outputVolume = 0.9
+
+        // Follow the system's default output device: whatever is chosen in Sound settings or the
+        // menu bar (speakers, headphones, AirPods, a display) is where the piano plays.
+        bindToDefaultOutputDevice()
+        var defaultOutput = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &defaultOutput, .main) { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                self?.handleDefaultOutputDeviceChange()
+            }
+        }
 
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
@@ -98,11 +137,52 @@ final class PianoEngine {
         pauseWorkItem?.cancel()
         pauseWorkItem = nil
         guard !engine.isRunning else { return }
+        bindToDefaultOutputDevice()
         do {
             try engine.start()
         } catch {
             NSLog("Music Touch: audio engine failed to start: \(error)")
         }
+    }
+
+    /// The device the system currently calls the default output, or 0 if there is none.
+    private static func defaultOutputDeviceID() -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id)
+        return status == noErr ? id : 0
+    }
+
+    /// Points the output node at the current default device. Only valid while the engine is stopped.
+    private func bindToDefaultOutputDevice() {
+        let id = Self.defaultOutputDeviceID()
+        guard id != 0, engine.outputNode.auAudioUnit.deviceID != id else { return }
+        do {
+            try engine.outputNode.auAudioUnit.setDeviceID(id)
+        } catch {
+            NSLog("Music Touch: could not select the default output device: \(error)")
+        }
+    }
+
+    /// The default output moved (headphones plugged in, AirPods connected, a display chosen):
+    /// rebuild the engine on the new device so the next note comes out of it.
+    private func handleDefaultOutputDeviceChange() {
+        let wasRunning = engine.isRunning
+        engine.stop()
+        bindToDefaultOutputDevice()
+        if wantsRunning || wasRunning {
+            do {
+                try engine.start()
+            } catch {
+                NSLog("Music Touch: audio engine failed to restart on the new output: \(error)")
+            }
+        }
+        onOutputDeviceChange?()
     }
 
     /// Lets the current notes and reverb finish, then pauses the engine.
@@ -168,12 +248,15 @@ final class PianoEngine {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    /// The engine stops itself when the output's format or device changes; bring it back.
     private func handleConfigurationChange() {
         guard wantsRunning, !engine.isRunning else { return }
+        bindToDefaultOutputDevice()
         do {
             try engine.start()
         } catch {
             NSLog("Music Touch: audio engine failed to restart: \(error)")
         }
+        onOutputDeviceChange?()
     }
 }

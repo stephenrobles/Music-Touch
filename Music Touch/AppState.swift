@@ -44,7 +44,7 @@ final class AppState {
     var pulsesLogo = UserDefaults.standard.bool(forKey: Keys.pulsesLogo) {
         didSet {
             UserDefaults.standard.set(pulsesLogo, forKey: Keys.pulsesLogo)
-            logo.setIdleDimmed(isEnabled && pulsesLogo)
+            logo.setPulsing(isEnabled && pulsesLogo)
         }
     }
 
@@ -84,18 +84,44 @@ final class AppState {
     }
 
     var pianoLoaded: Bool { piano.instrumentLoaded }
+    var audioRunning: Bool { piano.isRunning }
+
+    /// Where the piano is playing, refreshed when the system's default output changes.
+    private(set) var audioOutputName = ""
+
+    /// The most recent note input, for the Settings › Status diagnostics.
+    struct LastInput {
+        var source: StrikeSource
+        var zone: Int
+        var date: Date
+    }
+
+    private(set) var lastInput: LastInput?
+
+    var lastInputDescription: String {
+        guard let lastInput else { return "None yet" }
+        let time = lastInput.date.formatted(date: .omitted, time: .standard)
+        return "\(lastInput.source.rawValue) · \(NoteZone.names[lastInput.zone]) · \(time)"
+    }
 
     @ObservationIgnored let overlay = OverlayController()
     @ObservationIgnored let piano = PianoEngine()
     @ObservationIgnored let logo = LidLogoController()
+    @ObservationIgnored let updater = AppUpdater()
     @ObservationIgnored private var hotKey: GlobalHotKey?
 
     private init() {
         overlay.orientation = orientation
         overlay.showsGuides = showsGuides
         piano.noteLength = noteLength
-        overlay.onStrike = { [weak self] zone, _ in
-            self?.strike(zone: zone)
+        audioOutputName = piano.outputDeviceName
+        piano.onOutputDeviceChange = { [weak self] in
+            guard let self else { return }
+            self.audioOutputName = self.piano.outputDeviceName
+            log.info("audio output is now \(self.audioOutputName, privacy: .public)")
+        }
+        overlay.onStrike = { [weak self] zone, _, source in
+            self?.strike(zone: zone, from: source)
         }
         hotKey = GlobalHotKey(keyCode: GlobalHotKey.toggleKeyCode, modifiers: GlobalHotKey.toggleModifiers) { [weak self] in
             self?.toggle()
@@ -129,7 +155,7 @@ final class AppState {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
             self?.refreshHelperStatus()
             if let self, self.pulsesLogo, self.isEnabled {
-                self.logo.setIdleDimmed(true)
+                self.logo.setPulsing(true)
             }
         }
         refreshHelperStatus()
@@ -149,17 +175,20 @@ final class AppState {
         log.info("Music Touch \(self.isEnabled ? "on" : "off", privacy: .public)")
         if isEnabled {
             piano.start()
+            audioOutputName = piano.outputDeviceName
+            log.info("audio engine \(self.piano.isRunning ? "running" : "NOT running", privacy: .public) on \(self.audioOutputName, privacy: .public)")
             overlay.show()
-            logo.setIdleDimmed(pulsesLogo)
+            logo.setPulsing(pulsesLogo)
         } else {
             overlay.hide()
             piano.stopAfterTail()
-            logo.setIdleDimmed(false)
+            logo.setPulsing(false)
         }
     }
 
-    private func strike(zone: Int) {
-        log.debug("strike zone \(zone) \(NoteZone.names[zone], privacy: .public)")
+    private func strike(zone: Int, from source: StrikeSource) {
+        log.debug("strike zone \(zone) \(NoteZone.names[zone], privacy: .public) via \(source.rawValue, privacy: .public)")
+        lastInput = LastInput(source: source, zone: zone, date: .now)
         piano.play(zone: zone)
         if pulsesLogo {
             logo.noteStruck()

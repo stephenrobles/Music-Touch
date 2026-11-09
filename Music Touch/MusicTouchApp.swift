@@ -50,6 +50,10 @@ struct MenuContent: View {
             Text("Settings…")
         }
         .keyboardShortcut(",")
+        if AppUpdater.isAvailable {
+            Button("Check for Updates…") { state.updater.checkForUpdates() }
+                .disabled(!state.updater.canCheckForUpdates)
+        }
 
         Divider()
 

@@ -2,9 +2,87 @@ import AppKit
 import CoreImage
 import QuartzCore
 
+/// Where a strike came from, shown in Settings › Status so touch delivery can be checked.
+enum StrikeSource: String {
+    case touch = "Touch"
+    case click = "Click"
+}
+
 @MainActor
 protocol OverlayViewDelegate: AnyObject {
-    func overlayView(_ view: OverlayView, didStrikeZone zone: Int, at point: CGPoint)
+    func overlayView(_ view: OverlayView, didStrikeZone zone: Int, at point: CGPoint, from source: StrikeSource)
+}
+
+/// Receives finger touches for the overlay view.
+///
+/// On macOS 27, finger touches reach an app only through gesture recognizers: AppKit does not
+/// deliver them through the responder chain's `touchesBegan(with:)` or through event monitors
+/// (Apple TN3212). This recognizer exists only to receive touches and hand them to the view. It
+/// reports `began` / `changed` / `ended` so AppKit keeps delivering, and never acts on its own.
+final class DirectTouchRecognizer: NSGestureRecognizer {
+    var handler: ((Set<NSTouch>, NSTouch.Phase) -> Void)?
+
+    /// Last known location in window coordinates, for `location(in:)`.
+    private var lastWindowLocation: NSPoint = .zero
+
+    override init(target: Any?, action: Selector?) {
+        super.init(target: target, action: action)
+        allowedTouchTypes = .direct
+        delaysPrimaryMouseButtonEvents = false
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    /// Every touch in the event, located in the recognizer's view.
+    private func touches(in event: NSEvent) -> Set<NSTouch> {
+        guard let view else { return event.allTouches() }
+        return event.touches(matching: .any, in: view)
+    }
+
+    override func touchesBegan(with event: NSEvent) {
+        let touches = touches(in: event)
+        remember(touches)
+        handler?(touches.filter { $0.phase == .began }, .began)
+        state = state == .possible ? .began : .changed
+    }
+
+    override func touchesMoved(with event: NSEvent) {
+        let touches = touches(in: event)
+        remember(touches)
+        handler?(touches.filter { $0.phase == .moved }, .moved)
+        if state == .began || state == .changed { state = .changed }
+    }
+
+    override func touchesEnded(with event: NSEvent) {
+        let touches = touches(in: event)
+        handler?(touches.filter { $0.phase == .ended }, .ended)
+        let stillTouching = touches.contains { NSTouch.Phase.touching.contains($0.phase) }
+        if state == .began || state == .changed {
+            state = stillTouching ? .changed : .ended
+        }
+    }
+
+    override func touchesCancelled(with event: NSEvent) {
+        let touches = touches(in: event)
+        handler?(touches.filter { $0.phase == .cancelled }, .cancelled)
+        if state == .began || state == .changed { state = .cancelled }
+    }
+
+    override func location(in view: NSView?) -> NSPoint {
+        guard let view else { return lastWindowLocation }
+        return view.convert(lastWindowLocation, from: nil)
+    }
+
+    private func remember(_ touches: Set<NSTouch>) {
+        let live = touches.filter { NSTouch.Phase.touching.contains($0.phase) }
+        guard !live.isEmpty else { return }
+        let sum = live.reduce(CGPoint.zero) { acc, touch in
+            let p = touch.location(in: nil)
+            return CGPoint(x: acc.x + p.x, y: acc.y + p.y)
+        }
+        lastWindowLocation = CGPoint(x: sum.x / CGFloat(live.count), y: sum.y / CGFloat(live.count))
+    }
 }
 
 /// Transparent full-screen view that turns finger touches (or clicks) into notes and glows.
@@ -21,16 +99,19 @@ final class OverlayView: NSView {
 
     private let guidesLayer = CALayer()
     private let glowLayer = CALayer()
+    private let touchRecognizer = DirectTouchRecognizer(target: nil, action: nil)
 
     /// Last zone struck by each live finger, so dragging across a boundary plays the next note.
     private var touchZones: [NSObject: Int] = [:]
     private var mouseZone: Int?
 
-    /// Finger touches arrive both as direct-touch events and as synthesized mouse events;
-    /// strikes close together in time and space are treated as one.
-    private var recentStrikes: [(point: CGPoint, time: CFTimeInterval)] = []
-    private let duplicateWindow: CFTimeInterval = 0.15
-    private let duplicateDistance: CGFloat = 40
+    /// Where fingers have recently been. macOS also synthesizes a click for a tap in apps that
+    /// are not marked touch-native; a click that lands where a finger just was is that echo and
+    /// is ignored, so a tap plays once. Real trackpad clicks nowhere near a finger still play.
+    private var recentTouches: [(point: CGPoint, time: CFTimeInterval)] = []
+    private let echoWindow: CFTimeInterval = 0.6
+    private let echoDistance: CGFloat = 48
+    private var mouseIsEcho = false
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,6 +122,11 @@ final class OverlayView: NSView {
         wantsRestingTouches = false
         layer?.addSublayer(guidesLayer)
         layer?.addSublayer(glowLayer)
+
+        touchRecognizer.handler = { [unowned self] touches, phase in
+            self.handleTouches(touches, phase: phase)
+        }
+        addGestureRecognizer(touchRecognizer)
     }
 
     @available(*, unavailable)
@@ -62,61 +148,65 @@ final class OverlayView: NSView {
         rebuildGuides()
     }
 
-    // MARK: Direct touches
+    // MARK: Direct touches (via the gesture recognizer)
 
-    override func touchesBegan(with event: NSEvent) {
-        for touch in event.touches(matching: .began, in: self) where touch.type == .direct {
-            let point = touch.location(in: self)
-            let zone = zone(at: point)
-            touchZones[key(for: touch)] = zone
-            strike(zone: zone, at: point)
-        }
-    }
-
-    override func touchesMoved(with event: NSEvent) {
-        for touch in event.touches(matching: .moved, in: self) where touch.type == .direct {
-            let point = touch.location(in: self)
-            let zone = zone(at: point)
-            let key = key(for: touch)
-            if touchZones[key] != zone {
-                touchZones[key] = zone
-                strike(zone: zone, at: point)
+    private func handleTouches(_ touches: Set<NSTouch>, phase: NSTouch.Phase) {
+        let now = CACurrentMediaTime()
+        switch phase {
+        case .began:
+            for touch in touches {
+                let point = touch.location(in: self)
+                let zone = zone(at: point)
+                touchZones[key(for: touch)] = zone
+                recentTouches.append((point, now))
+                strike(zone: zone, at: point, from: .touch)
+            }
+        case .moved:
+            for touch in touches {
+                let point = touch.location(in: self)
+                let zone = zone(at: point)
+                let key = key(for: touch)
+                recentTouches.append((point, now))
+                if touchZones[key] != zone {
+                    touchZones[key] = zone
+                    strike(zone: zone, at: point, from: .touch)
+                }
+            }
+        default:
+            for touch in touches {
+                recentTouches.append((touch.location(in: self), now))
+                touchZones.removeValue(forKey: key(for: touch))
             }
         }
+        recentTouches.removeAll { now - $0.time > echoWindow }
     }
 
-    override func touchesEnded(with event: NSEvent) {
-        for touch in event.touches(matching: .ended, in: self) {
-            touchZones.removeValue(forKey: key(for: touch))
-        }
-    }
-
-    override func touchesCancelled(with event: NSEvent) {
-        for touch in event.touches(matching: .cancelled, in: self) {
-            touchZones.removeValue(forKey: key(for: touch))
-        }
-    }
-
-    // MARK: Mouse (trackpad testing, and the compatibility events a finger also produces)
+    // MARK: Mouse (trackpad testing, and the click macOS synthesizes for a tap)
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        let now = CACurrentMediaTime()
+        recentTouches.removeAll { now - $0.time > echoWindow }
+        mouseIsEcho = recentTouches.contains { hypot($0.point.x - point.x, $0.point.y - point.y) < echoDistance }
+        guard !mouseIsEcho else { return }
         let zone = zone(at: point)
         mouseZone = zone
-        strike(zone: zone, at: point)
+        strike(zone: zone, at: point, from: .click)
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard !mouseIsEcho else { return }
         let point = convert(event.locationInWindow, from: nil)
         let zone = zone(at: point)
         if mouseZone != zone {
             mouseZone = zone
-            strike(zone: zone, at: point)
+            strike(zone: zone, at: point, from: .click)
         }
     }
 
     override func mouseUp(with event: NSEvent) {
         mouseZone = nil
+        mouseIsEcho = false
     }
 
     // MARK: Striking
@@ -129,16 +219,9 @@ final class OverlayView: NSView {
         (touch.identity as? NSObject) ?? NSNumber(value: ObjectIdentifier(touch.identity).hashValue)
     }
 
-    private func strike(zone: Int, at point: CGPoint) {
-        let now = CACurrentMediaTime()
-        recentStrikes.removeAll { now - $0.time > duplicateWindow }
-        if recentStrikes.contains(where: { hypot($0.point.x - point.x, $0.point.y - point.y) < duplicateDistance }) {
-            return
-        }
-        recentStrikes.append((point, now))
-
+    private func strike(zone: Int, at point: CGPoint, from source: StrikeSource) {
         showGlow(at: point, color: NoteZone.color(for: zone))
-        delegate?.overlayView(self, didStrikeZone: zone, at: point)
+        delegate?.overlayView(self, didStrikeZone: zone, at: point, from: source)
     }
 
     // MARK: Glow

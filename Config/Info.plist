@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Sparkle updates for the direct download. Everything else in Info.plist is generated from build settings. -->
+	<key>SUFeedURL</key>
+	<string>https://beardfm.app/music-touch/appcast.xml</string>
+	<!-- Public half of the EdDSA key in the login keychain (account "musictouch"). -->
+	<key>SUPublicEDKey</key>
+	<string>1VRhr+Ycjp1fhkKPU9UZIwuLLf/4yDX3g91bXEXcAdw=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+</dict>
+</plist>
