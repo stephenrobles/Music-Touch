@@ -1,5 +1,6 @@
 import AppKit
 import CoreImage
+import OSLog
 import QuartzCore
 
 /// Where a strike came from, shown in Settings › Status so touch delivery can be checked.
@@ -42,6 +43,7 @@ final class DirectTouchRecognizer: NSGestureRecognizer {
 
     override func touchesBegan(with event: NSEvent) {
         let touches = touches(in: event)
+        log.info("recognizer touchesBegan: \(touches.count) touches (all: \(event.allTouches().count)), state \(self.state.rawValue), window \(self.view?.window != nil)")
         remember(touches)
         handler?(touches.filter { $0.phase == .began }, .began)
         state = state == .possible ? .began : .changed
@@ -225,6 +227,7 @@ final class OverlayView: NSView {
         let now = CACurrentMediaTime()
         recentTouches.removeAll { now - $0.time > echoWindow }
         mouseIsEcho = recentTouches.contains { hypot($0.point.x - point.x, $0.point.y - point.y) < echoDistance }
+        log.info("mouseDown subtype \(event.subtype.rawValue) at (\(Int(point.x)), \(Int(point.y))) in bounds \(Int(self.bounds.width))×\(Int(self.bounds.height)), echo \(self.mouseIsEcho)")
         guard !mouseIsEcho else { return }
         let zone = zone(at: point)
         mouseZone = zone

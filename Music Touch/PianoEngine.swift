@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreAudio
+import OSLog
 
 /// A soft, reverberant piano built from the system General MIDI sound bank.
 ///
@@ -140,8 +141,9 @@ final class PianoEngine {
         bindToDefaultOutputDevice()
         do {
             try engine.start()
+            log.info("audio engine started on \(self.outputDeviceName, privacy: .public), output format \(self.engine.outputNode.outputFormat(forBus: 0).sampleRate) Hz")
         } catch {
-            NSLog("Music Touch: audio engine failed to start: \(error)")
+            log.error("audio engine failed to start: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -165,7 +167,7 @@ final class PianoEngine {
         do {
             try engine.outputNode.auAudioUnit.setDeviceID(id)
         } catch {
-            NSLog("Music Touch: could not select the default output device: \(error)")
+            log.error("could not select the default output device \(id): \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -198,7 +200,10 @@ final class PianoEngine {
     }
 
     func play(zone: Int, velocity: UInt8 = 92) {
-        guard engine.isRunning, samplers.indices.contains(zone) else { return }
+        guard engine.isRunning, samplers.indices.contains(zone) else {
+            log.error("play ignored: engine running \(self.engine.isRunning), instrument loaded \(self.instrumentLoaded), output \(self.outputDeviceName, privacy: .public)")
+            return
+        }
         let sampler = samplers[zone]
         let note = NoteZone.midiNote(for: zone)
 
