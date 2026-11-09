@@ -88,7 +88,7 @@ uploads the App Store target.
 | `OverlayView.swift` | Direct-touch gesture recognizer and mouse handling, glissando tracking, rings and separator lines |
 | `NoteZone.swift` | Zone geometry, MIDI notes, note names and colours |
 | `PianoEngine.swift` | AVAudioEngine graph: one sampler per zone, low-pass, reverb, per-zone fades; follows the default output device |
-| `LidLogoController.swift` | Lid logo blink and the privileged helper installer |
+| `LidLogoController.swift` | Lid logo pulse and the privileged helper installer |
 | `AppUpdater.swift` | Sparkle updater for the direct download (a stub in the App Store build) |
 | `GlobalHotKey.swift` | Carbon hot key for ⌃⌥⌘M |
 | `SettingsView.swift` | The Settings window |
