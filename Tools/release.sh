@@ -10,7 +10,8 @@
 #                downloads/Music-Touch-<version>.dmg and downloads/Music-Touch.dmg, signs it for Sparkle
 #                with the EdDSA key in the keychain (account "musictouch") and adds the release to
 #                site/static/music-touch/appcast.xml, with release-notes/<version>.html as the notes when
-#                present. Commit and push the site afterwards; Cloudflare builds and deploys from main.
+#                present. Publish the site afterwards with its scripts/publish.sh (commit, push to main, and
+#                `npm run fm:deploy` for beard.fm/app); the command is printed at the end.
 #
 # Output: dist/Music Touch <version>.dmg
 set -euo pipefail
@@ -104,7 +105,8 @@ if [[ $UPLOAD -eq 1 ]]; then
   [[ -f "$ROOT/release-notes/$VERSION.html" ]] && NOTES=("$ROOT/release-notes/$VERSION.html")
   "$ROOT/Tools/update-appcast.py" "$SITE/site/static/music-touch/appcast.xml" "$VERSION" "$BUILDNUM" "$MIN_MACOS" \
     "https://beardfm.app/downloads/$UPDATE_NAME" "$SIGNATURE" "${NOTES[@]}"
-  echo "▶ Copied. Commit and push the beardfm.app changes to publish."
+  echo "▶ Copied. Not live yet. Publish with:"
+  echo "    \"$SITE/scripts/publish.sh\" \"Music Touch $VERSION: DMG and Sparkle update\" site/static/downloads/$UPDATE_NAME site/static/downloads/Music-Touch.dmg site/static/music-touch/appcast.xml"
 fi
 
 ls -la "$DMG"
