@@ -269,6 +269,21 @@ async function submit() {
   if (["WAITING_FOR_REVIEW", "IN_REVIEW", "PENDING_DEVELOPER_RELEASE"].includes(v.attributes.appStoreState)) {
     console.log(`${VERSION}: already ${v.attributes.appStoreState}`); return;
   }
+  // After a rejection the submission stays open as UNRESOLVED_ISSUES; resubmitting it is the
+  // API's version of "Resubmit to App Review", and a second submission cannot be opened beside it.
+  const rejected = await get(`/apps/${a.id}/reviewSubmissions?filter[platform]=${PLATFORM}&filter[state]=UNRESOLVED_ISSUES&limit=5`);
+  if (rejected.data[0]) {
+    const sub = rejected.data[0];
+    // Each rejected item has to be marked resolved first, or the submission is refused with
+    // "Version is not ready to be submitted yet".
+    const items = await get(`/reviewSubmissions/${sub.id}/items`);
+    for (const item of items.data.filter((i) => i.attributes.state === "REJECTED")) {
+      await patch(`/reviewSubmissionItems/${item.id}`, { data: { type: "reviewSubmissionItems", id: item.id, attributes: { resolved: true } } });
+    }
+    await patch(`/reviewSubmissions/${sub.id}`, { data: { type: "reviewSubmissions", id: sub.id, attributes: { submitted: true } } });
+    console.log(`resubmitted for review (${sub.id})`);
+    return;
+  }
   const open = await get(`/apps/${a.id}/reviewSubmissions?filter[platform]=${PLATFORM}&filter[state]=READY_FOR_REVIEW&limit=5`);
   let sub = open.data[0];
   if (!sub) sub = (await post("/reviewSubmissions", { data: { type: "reviewSubmissions", attributes: { platform: PLATFORM }, relationships: { app: { data: { type: "apps", id: a.id } } } } })).data;

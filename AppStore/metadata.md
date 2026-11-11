@@ -6,7 +6,7 @@ Everything entered in App Store Connect for 1.0, kept here as the source of trut
 ## App Information
 
 - **Name:** Music Touch: Touchscreen Piano
-- **Subtitle (30):** Play your touchscreen Mac
+- **Subtitle (30):** Play piano on your screen
 - **Bundle ID:** fm.beard.MusicTouch (Mac)
 - **SKU:** MusicTouch
 - **Primary category:** Music
